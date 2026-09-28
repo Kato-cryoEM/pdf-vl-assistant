@@ -1,0 +1,16 @@
+# 解析結果（論文本文・図・翻訳・コメントが入るので公開しない）
+jobs/
+# モデル（巨大）
+models/
+*.gguf
+# llama.cpp などの外部バイナリ
+vendor/
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+# ログ・作業ファイル
+*.log
+supplement.pdf
+input.pdf
+.DS_Store

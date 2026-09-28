@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>文境界チェック</title>
+<style>
+  :root {
+    --bg: #14161b; --panel: #1e2129; --panel2: #262a34; --border: #333844;
+    --accent: #4a9eff; --accent2: #6bd6a8; --hi: #ffd479;
+    --text: #e6e8eb; --muted: #8a94a5; --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.55;
+  }
+  header {
+    padding: 10px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 15px; }
+  main { padding: 12px 16px; }
+  input, select, button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 6px 10px; font-size: 13px;
+  }
+  button { background: var(--accent); border-color: var(--accent); color: white; cursor: pointer; font-weight: 600; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--text); }
+
+  #status { color: var(--muted); font-size: 12px; margin-left: auto; font-family: ui-monospace, monospace; }
+
+  #logPane {
+    background: #0f1116; border: 1px solid var(--border); border-radius: 5px;
+    padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 11px;
+    color: var(--muted); max-height: 130px; overflow: auto;
+    margin: 8px 0;
+  }
+  #logPane .lg-log { color: var(--muted); }
+  #logPane .lg-log::before { content: "▸ "; color: var(--accent); }
+  #logPane .lg-chunk { color: var(--text); background: rgba(74,158,255,0.06); display: inline; }
+  #logPane .lg-err { color: var(--danger); font-weight: 600; }
+
+  .split {
+    display: grid; grid-template-columns: minmax(340px, 42%) 1fr;
+    gap: 12px; height: calc(100vh - 260px); min-height: 500px;
+  }
+  .pane {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  .pane-head { padding: 6px 10px; background: var(--panel2); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .pane-body { flex: 1; overflow: auto; padding: 10px; }
+
+  .pdf-container { display: inline-block; max-width: 100%; }
+  .pdf-container img { width: 100%; height: auto; display: block; background: #fff; }
+  .pdf-container.placeholder {
+    background: var(--panel2); color: var(--muted); font-size: 12px;
+    padding: 40px; text-align: center; border-radius: 4px;
+  }
+
+  .para {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 5px;
+    margin-bottom: 12px; padding: 8px 12px;
+  }
+  .para .stats {
+    font-size: 11px; color: var(--muted); margin-bottom: 6px;
+    font-family: ui-monospace, monospace;
+  }
+  .para .stats .ok { color: var(--accent2); }
+  .para .stats .warn { color: var(--hi); }
+  .para .side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .para .col {
+    background: var(--panel); border-radius: 4px; padding: 6px 8px;
+    font-size: 13px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+    min-height: 40px;
+  }
+  .para .col h4 { margin: 0 0 4px 0; font-size: 11px; color: var(--muted); font-weight: 500; font-family: ui-monospace, monospace; }
+  .para .col.waiting { color: var(--muted); font-style: italic; }
+  .sent-boundary {
+    display: inline-block; color: var(--hi); font-weight: 700; margin: 0 2px;
+    background: rgba(255,212,121,0.15); padding: 0 3px; border-radius: 2px;
+    font-family: ui-monospace, monospace;
+  }
+  .sent-boundary.disagree { color: var(--danger); background: rgba(255,107,107,0.18); }
+</style>
+</head>
+<body>
+<header>
+  <h1>文境界チェック (pysbd vs VL)</h1>
+  <input type="file" id="file" accept="application/pdf">
+  <label style="font-size:12px;color:var(--muted)">ページ <input type="number" id="pageNo" value="1" min="1" style="width:60px"><span id="totalPages" style="color:var(--muted);font-size:11px;margin-left:4px"></span></label>
+  <label style="font-size:12px;color:var(--muted)">モデル <select id="model"></select></label>
+  <button id="run">確認開始</button>
+  <button id="rerun" class="ghost" style="display:none">別のページで再解析</button>
+  <span id="status">準備完了</span>
+</header>
+<main>
+  <div id="logPane"><div class="lg-log">待機中</div></div>
+  <div class="split">
+    <div class="pane">
+      <div class="pane-head">1ページ目のPDF画像</div>
+      <div class="pane-body">
+        <div class="pdf-container placeholder" id="imgContainer">PDFをアップロードするとここに表示されます</div>
+      </div>
+    </div>
+    <div class="pane">
+      <div class="pane-head">文境界の比較 (段落ごと)</div>
+      <div class="pane-body" id="paras"></div>
+    </div>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+async function loadModels() {
+  try {
+    const r = await fetch('/api/models');
+    const j = await r.json();
+    $('model').innerHTML = '';
+    const arr = (j.models || []).slice().sort((a,b) => (/vl/i.test(a)?0:1) - (/vl/i.test(b)?0:1));
+    for (const m of arr) {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m;
+      if (m === j.default) o.selected = true;
+      $('model').appendChild(o);
+    }
+    if (!arr.includes(j.default)) {
+      const o = document.createElement('option'); o.value = j.default;
+      o.textContent = j.default + ' (未DL)'; o.selected = true;
+      $('model').prepend(o);
+    }
+  } catch (e) {}
+}
+loadModels();
+
+let paras = [];
+let pysbd = {};
+let vlChunkBuf = '';
+let vlChunkEl = null;
+let currentJobId = null;
+let currentPageNo = 1;
+
+function log(msg, cls='lg-log') {
+  const div = document.createElement('div');
+  div.className = cls;
+  div.textContent = msg;
+  $('logPane').appendChild(div);
+  $('logPane').scrollTop = $('logPane').scrollHeight;
+}
+
+function appendChunk(text) {
+  // すべての vl_chunk を1つのブロックに集約(改行維持)
+  if (!vlChunkEl) {
+    vlChunkEl = document.createElement('pre');
+    vlChunkEl.className = 'lg-chunk';
+    vlChunkEl.style.margin = '4px 0 4px 12px';
+    vlChunkEl.style.whiteSpace = 'pre-wrap';
+    vlChunkEl.style.background = 'rgba(74,158,255,0.06)';
+    vlChunkEl.style.padding = '4px 6px';
+    vlChunkEl.style.borderLeft = '2px solid var(--accent)';
+    vlChunkEl.style.fontSize = '11px';
+    vlChunkEl.style.color = 'var(--text)';
+    $('logPane').appendChild(vlChunkEl);
+  }
+  vlChunkBuf += text;
+  vlChunkEl.textContent = vlChunkBuf;
+  $('logPane').scrollTop = $('logPane').scrollHeight;
+}
+
+function clearAll() {
+  $('logPane').innerHTML = '';
+  $('paras').innerHTML = '';
+  $('imgContainer').className = 'pdf-container placeholder';
+  $('imgContainer').innerHTML = 'PDF処理中...';
+  paras = []; pysbd = {}; vlChunkBuf = ''; vlChunkEl = null;
+}
+
+function renderWithBoundaries(text, ranges, disagreeSet) {
+  const container = document.createElement('span');
+  if (!ranges || !ranges.length) {
+    container.textContent = text;
+    return container;
+  }
+  for (let i = 0; i < ranges.length; i++) {
+    const [s, e] = ranges[i];
+    if (i > 0) {
+      const marker = document.createElement('span');
+      marker.className = 'sent-boundary' + (disagreeSet && disagreeSet.has(s) ? ' disagree' : '');
+      marker.textContent = '│';
+      marker.title = `offset ${s}`;
+      container.appendChild(marker);
+    }
+    container.appendChild(document.createTextNode(text.slice(s, e)));
+  }
+  return container;
+}
+
+function renderInitial() {
+  const root = $('paras');
+  root.innerHTML = '';
+  for (const p of paras) {
+    const div = document.createElement('div');
+    div.className = 'para';
+    div.setAttribute('data-i', p.i);
+    const stats = document.createElement('div');
+    stats.className = 'stats';
+    const py = pysbd[p.i] || [];
+    stats.innerHTML = `Block ${p.i} (chars=${p.text.length}) | pysbd=${py.length}文 / VL=<span class="warn">推論中</span>`;
+    div.appendChild(stats);
+    const sxs = document.createElement('div');
+    sxs.className = 'side-by-side';
+    const colPy = document.createElement('div');
+    colPy.className = 'col';
+    colPy.innerHTML = '<h4>pysbd</h4>';
+    colPy.appendChild(renderWithBoundaries(p.text, py));
+    const colVl = document.createElement('div');
+    colVl.className = 'col waiting';
+    colVl.innerHTML = '<h4>VL</h4><span>推論待ち...</span>';
+    sxs.appendChild(colPy); sxs.appendChild(colVl);
+    div.appendChild(sxs);
+    root.appendChild(div);
+  }
+}
+
+function updateVl(vlResult) {
+  for (const p of paras) {
+    const py = pysbd[p.i] || [];
+    const vl = vlResult[p.i] || [];
+    const pyStarts = new Set(py.map(r => r[0]));
+    const vlStarts = new Set(vl.map(r => r[0]));
+    const disagreePy = new Set([...pyStarts].filter(x => !vlStarts.has(x)));
+    const disagreeVl = new Set([...vlStarts].filter(x => !pyStarts.has(x)));
+    const agree = [...pyStarts].filter(x => vlStarts.has(x)).length;
+    const status = (disagreePy.size + disagreeVl.size === 0)
+      ? '<span class="ok">✓ 一致</span>'
+      : `<span class="warn">差異あり</span> pysbdだけ:${disagreePy.size} VLだけ:${disagreeVl.size} 一致:${agree}`;
+    const div = document.querySelector(`.para[data-i="${p.i}"]`);
+    if (!div) continue;
+    div.querySelector('.stats').innerHTML =
+      `Block ${p.i} (chars=${p.text.length}) | pysbd=${py.length}文 / VL=${vl.length}文 | ${status}`;
+    const cols = div.querySelectorAll('.col');
+    const colPy = cols[0], colVl = cols[1];
+    colPy.innerHTML = '<h4>pysbd</h4>';
+    colPy.appendChild(renderWithBoundaries(p.text, py, disagreePy));
+    colVl.className = 'col';
+    colVl.innerHTML = '<h4>VL</h4>';
+    colVl.appendChild(renderWithBoundaries(p.text, vl, disagreeVl));
+  }
+}
+
+$('run').addEventListener('click', async () => {
+  const f = $('file').files[0];
+  if (!f) { alert('PDFを選択してください'); return; }
+  $('run').disabled = true;
+  $('rerun').disabled = true;
+  $('status').textContent = 'アップロード中...';
+  clearAll();
+  currentPageNo = parseInt($('pageNo').value) || 1;
+  log(`アップロード開始 (page ${currentPageNo})`);
+
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('model', $('model').value);
+  fd.append('page', String(currentPageNo));
+  let jobId;
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    jobId = j.job_id;
+    currentJobId = jobId;
+    $('status').textContent = 'ジョブ ' + jobId + ' / page ' + currentPageNo;
+    log('ジョブ ' + jobId + ' 開始');
+  } catch (e) {
+    log('アップロード失敗: ' + e, 'lg-err');
+    $('run').disabled = false; return;
+  }
+  subscribe(jobId);
+});
+
+// 別のページで再解析(PDFをサーバに残しているので再アップロード不要)
+$('rerun').addEventListener('click', async () => {
+  if (!currentJobId) return;
+  $('run').disabled = true;
+  $('rerun').disabled = true;
+  const newPage = parseInt($('pageNo').value) || 1;
+  clearAll();
+  currentPageNo = newPage;
+  log(`page ${newPage} で再解析`);
+  const fd = new FormData();
+  fd.append('page', String(newPage));
+  fd.append('model', $('model').value);
+  let newJobId;
+  try {
+    const r = await fetch('/api/rerun/' + currentJobId, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    newJobId = j.job_id;
+    currentJobId = newJobId;
+    $('status').textContent = 'ジョブ ' + newJobId + ' / page ' + newPage;
+    log('新ジョブ ' + newJobId + ' 開始');
+  } catch (e) {
+    log('再解析失敗: ' + e, 'lg-err');
+    $('run').disabled = false; return;
+  }
+  subscribe(newJobId);
+});
+
+function subscribe(jobId) {
+  const es = new EventSource('/api/job/' + jobId + '/stream');
+  es.onmessage = (ev) => {
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    switch (d.type) {
+      case 'log':
+        log(d.msg);
+        break;
+      case 'total_pages':
+        $('totalPages').textContent = `/ 全${d.total}ページ`;
+        $('pageNo').max = d.total;
+        break;
+      case 'image_ready':
+        $('imgContainer').className = 'pdf-container';
+        $('imgContainer').innerHTML = '';
+        const img = document.createElement('img');
+        img.src = d.url;
+        $('imgContainer').appendChild(img);
+        log('画像表示 ' + d.width + 'x' + d.height);
+        break;
+      case 'prepared':
+        paras = d.paras;
+        pysbd = d.pysbd;
+        renderInitial();
+        log(`prepared: ${paras.length}段落 / pysbd総文数=${Object.values(pysbd).reduce((a,r)=>a+r.length,0)}`);
+        break;
+      case 'vl_chunk':
+        appendChunk(d.text);
+        break;
+      case 'vl_done':
+        updateVl(d.vl);
+        log(`VL完了 ${d.elapsed}s、応答 ${d.raw.length}文字、パース済`);
+        break;
+      case 'done':
+        $('status').textContent = '完了 (page ' + currentPageNo + ')';
+        $('run').disabled = false;
+        $('rerun').disabled = false;
+        $('rerun').style.display = '';
+        es.close();
+        break;
+      case 'error':
+        log('エラー: ' + d.msg, 'lg-err');
+        $('status').textContent = 'エラー';
+        $('run').disabled = false;
+        $('rerun').disabled = false;
+        es.close();
+        break;
+    }
+  };
+  es.onerror = () => { /* auto-retry */ };
+}
+</script>
+</body>
+</html>

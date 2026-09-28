@@ -1,0 +1,2988 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF VL Assistant</title>
+<style>
+  :root {
+    --bg: #14161b;
+    --panel: #1e2129;
+    --panel2: #262a34;
+    --border: #333844;
+    --accent: #4a9eff;
+    --accent2: #6bd6a8;
+    --hi: #ffd479;
+    --text: #e6e8eb;
+    --muted: #8a94a5;
+    --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  header {
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header .status { margin-left: auto; color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
+  main { padding: 12px 16px 12px 16px; display: flex; flex-direction: column; gap: 12px; padding-bottom: 260px; }
+
+  input, select, button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px;
+  }
+  button { cursor: pointer; background: var(--accent); border-color: var(--accent); color: white; font-weight: 600; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.danger { background: var(--danger); border-color: var(--danger); }
+  button.ghost { background: transparent; color: var(--text); }
+  label { color: var(--muted); font-size: 12px; }
+
+  .section {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+  .uploader.drag { border: 1px dashed var(--accent); background: #1a2434; }
+
+  .progress { font-size: 13px; }
+  .bar { height: 5px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; background: var(--accent); transition: width 0.3s; }
+  .stage-line { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: ui-monospace, monospace; }
+  .stage-line .k { color: var(--accent2); }
+  .stage-line .t { color: var(--hi); }
+
+  #reader.hidden { display: none !important; }
+
+  /* #reader/#overallSummary の非表示は .hidden クラスで制御 */
+  .nav {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    /* スクロールしても常に上部に固定 */
+    position: sticky; top: 0; z-index: 30;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  }
+  .nav .page-info { font-family: ui-monospace, monospace; font-size: 14px; }
+  .nav .spacer { flex: 1; }
+  .nav .page-status { font-size: 12px; color: var(--muted); }
+  .nav input[type="number"] { width: 70px; }
+  /* 解析開始ボタン横のインラインプログレス */
+  .progress-inline .bar { height: 4px; margin-top: 3px; }
+  .progress-inline .stage-line { margin-top: 2px; color: var(--muted); }
+
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    height: calc(100vh - 260px);
+    min-height: 500px;
+  }
+  .pane {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .pane .pane-head {
+    padding: 6px 10px; border-bottom: 1px solid var(--border);
+    background: var(--panel2); font-size: 12px; color: var(--muted);
+    display: flex; justify-content: space-between;
+  }
+  .pane .pane-body { flex: 1; overflow: auto; padding: 8px; }
+
+  .pdf-outer { display: block; }
+  .pdf-container {
+    position: relative; display: block;
+    user-select: none;
+  }
+  .pdf-container img {
+    display: block; width: 100%; height: auto;
+    background: #fff;
+  }
+  .pdf-container svg {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    overflow: visible;
+  }
+  /* PDF に重ねて表示する figure overlay (fixed で pdfBody の可視領域をカバー) */
+  .fig-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    /* grid で行を明示: header, viewport (最大化), caption (可変 max) */
+    display: grid;
+    grid-template-rows: 40px 1fr auto;
+    grid-template-columns: 100%;
+    background: rgba(20, 26, 33, 0.97);
+    border: 2px solid var(--accent2);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    z-index: 50;
+    overflow: hidden;
+  }
+  .fig-ov-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; background: rgba(107,214,168,0.12); border-bottom: 1px solid var(--border);
+    font-size: 13px; font-weight: 600; color: var(--accent2);
+    min-height: 0;
+  }
+  .fig-ov-tools button { margin-left: 4px; font-size: 12px; padding: 3px 8px; }
+  .fig-ov-viewport {
+    position: relative; overflow: hidden; background: #fff;
+    cursor: grab;
+    min-height: 0;  /* grid 内で高さを縮められるように */
+  }
+  .fig-ov-viewport.grabbing { cursor: grabbing; }
+  .fig-ov-viewport.zoom-in-cursor { cursor: zoom-in; }
+  .fig-ov-img {
+    position: absolute; top: 0; left: 0;
+    transform-origin: 0 0;
+    transition: transform 0.12s ease-out;
+    user-select: none; -webkit-user-drag: none;
+  }
+  .fig-ov-img.dragging { transition: none; }
+  .fig-ov-caption {
+    max-height: 140px;  /* 画像を大きく見せるためキャプションは控えめ */
+    overflow-y: auto;
+    padding: 6px 12px; background: var(--panel);
+    border-top: 1px solid var(--border);
+    font-size: 12px; line-height: 1.5; color: var(--text);
+    white-space: pre-wrap;
+  }
+  .block-rect {
+    fill: rgba(74, 158, 255, 0.0);
+    stroke: rgba(74, 158, 255, 0.0);
+    stroke-width: 1;
+    cursor: pointer;
+    transition: fill 0.15s, stroke 0.15s;
+  }
+  .block-rect:hover { fill: rgba(74, 158, 255, 0.18); stroke: rgba(74, 158, 255, 0.6); }
+  .block-rect.active { fill: rgba(255, 212, 121, 0.28); stroke: rgba(255, 212, 121, 0.85); stroke-width: 2; }
+  .selection-rect {
+    fill: rgba(255, 212, 121, 0.10);
+    stroke: rgba(255, 212, 121, 0.75);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
+    pointer-events: none;
+  }
+
+  /* 流し込みレイアウト。ラベルに応じて段落種別のスタイルを付与 */
+  .ja-flow { padding: 4px 8px 24px; }
+  .ja-para {
+    margin: 16px 0 0 0;
+    padding: 8px 4px 4px 4px;
+    line-height: 1.85;
+    font-size: 14px;
+    word-break: break-word;
+    position: relative;
+    border-top: 1px dashed rgba(160,160,180,0.15);
+  }
+  .ja-para:first-child { border-top: none; margin-top: 4px; }
+  /* Fig リンク */
+  .fig-ref {
+    color: var(--accent);
+    text-decoration: underline dotted;
+    cursor: pointer;
+  }
+  .fig-ref:hover {
+    color: var(--accent2);
+    background: rgba(107, 214, 168, 0.15);
+    border-radius: 2px;
+  }
+  /* コメントマーカー */
+  .ja-sent.has-comment {
+    border-bottom: 2px solid var(--hi);
+  }
+  .comment-marker {
+    display: inline-block;
+    font-size: 12px;
+    cursor: pointer;
+    margin-left: 3px;
+    vertical-align: middle;
+    opacity: 0.85;
+  }
+  .comment-marker:hover { opacity: 1; }
+  /* コメント一覧 */
+  #commentsList {
+    position: fixed; right: 0; top: 0; bottom: 0; width: 400px;
+    background: var(--panel); border-left: 1px solid var(--border);
+    box-shadow: -4px 0 12px rgba(0,0,0,0.4);
+    z-index: 150; display: none;
+    flex-direction: column;
+  }
+  #commentsList.show { display: flex; }
+  #commentsList .cl-head {
+    padding: 10px 14px; background: var(--panel2); border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #commentsList .cl-head h3 { margin: 0; font-size: 14px; color: var(--accent2); }
+  #commentsList .cl-body { flex: 1; overflow: auto; padding: 8px 12px; }
+  .comment-item {
+    background: var(--panel2); border: 1px solid var(--border);
+    border-left: 3px solid var(--hi);
+    border-radius: 5px; padding: 8px 10px; margin-bottom: 8px;
+    cursor: pointer;
+  }
+  .comment-item:hover { background: rgba(255,212,121,0.08); }
+  .comment-item .meta {
+    font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace;
+    margin-bottom: 3px;
+  }
+  .comment-item .comment { font-size: 13px; white-space: pre-wrap; }
+  .comment-item .src {
+    font-size: 11px; color: var(--muted); margin-top: 4px;
+    max-height: 3em; overflow: hidden;
+  }
+  .comment-item .del {
+    float: right; color: var(--danger); cursor: pointer;
+    padding: 0 4px; font-size: 12px;
+  }
+  /* コメント編集モーダル */
+  #commentModal .modal-inner {
+    background: var(--panel); padding: 20px; border-radius: 8px;
+    max-width: 600px; width: 90%;
+  }
+  /* --- モデル管理 --- */
+  #llmModal .modal-inner {
+    background: var(--panel); padding: 20px; border-radius: 8px;
+    max-width: 760px; width: 92%; max-height: 88vh; overflow: auto;
+  }
+  .llm-status {
+    font-size: 12px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 8px 10px; line-height: 1.7;
+  }
+  .llm-h { margin: 16px 0 6px; font-size: 13px; color: var(--accent); }
+  .llm-list { display: flex; flex-direction: column; gap: 6px; }
+  .llm-item {
+    display: flex; align-items: center; gap: 10px; font-size: 12px;
+    background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 7px 10px;
+  }
+  .llm-item .nm { flex: 1; min-width: 0; }
+  .llm-item .nm b { font-size: 13px; }
+  .llm-item .meta { color: var(--muted); font-size: 11px; }
+  .llm-item.active { border-color: var(--accent2); }
+  .llm-badge {
+    font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    background: rgba(74,158,255,0.18); color: var(--accent); white-space: nowrap;
+  }
+  .llm-badge.warn { background: rgba(255,107,107,0.15); color: var(--danger); }
+  .llm-badge.ok { background: rgba(107,214,168,0.18); color: var(--accent2); }
+  .llm-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .llm-bar > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+  /* --- 種別スタイル (data-label) --- */
+  .ja-para[data-label="title"] {
+    font-size: 22px; font-weight: 700; text-align: center;
+    margin: 18px 0 10px; color: var(--text); letter-spacing: 0.02em;
+  }
+  .ja-para[data-label="authors"] {
+    text-align: center; font-size: 13px; margin: 2px 0; color: var(--text);
+  }
+  .ja-para[data-label="affiliation"] {
+    text-align: center; font-size: 12px; margin: 2px 0;
+    color: var(--muted); font-style: italic;
+  }
+  .ja-para[data-label="contact"] {
+    text-align: center; font-size: 12px; margin: 2px 0 14px;
+    color: var(--muted); font-family: ui-monospace, monospace;
+  }
+  .ja-para[data-label="keywords"] {
+    font-size: 12px; margin: 6px 0 12px; padding: 4px 8px;
+    background: var(--panel2); border-radius: 4px;
+  }
+  .ja-para[data-label="abstract_heading"], .ja-para[data-label="heading"] {
+    font-size: 17px; font-weight: 700; color: var(--accent2);
+    margin: 28px 0 10px;
+    padding: 6px 8px;
+    border-top: 2px solid var(--accent2);
+    border-bottom: 1px solid var(--border);
+    background: rgba(107, 214, 168, 0.06);
+  }
+  .ja-para[data-label="subheading"] {
+    font-size: 15px; font-weight: 700; color: var(--accent);
+    margin: 24px 0 8px;
+    padding: 4px 8px;
+    border-left: 3px solid var(--accent);
+    background: rgba(74, 158, 255, 0.06);
+  }
+  /* 見出し直後の body 段落は上マージンを縮めて隣接感を出す */
+  .ja-para[data-label="heading"] + .ja-para[data-label="body"],
+  .ja-para[data-label="heading"] + .ja-para:not([data-label]),
+  .ja-para[data-label="subheading"] + .ja-para[data-label="body"],
+  .ja-para[data-label="subheading"] + .ja-para:not([data-label]),
+  .ja-para[data-label="abstract_heading"] + .ja-para[data-label="body"],
+  .ja-para[data-label="abstract_heading"] + .ja-para:not([data-label]) {
+    margin-top: 6px;
+    border-top: none;
+  }
+  /* 通常段落(body)からbody段落へは通常のマージン */
+  .ja-para[data-label="abstract_body"] {
+    padding: 8px 12px; margin: 6px 0 14px;
+    background: rgba(107, 214, 168, 0.06);
+    border-left: 3px solid var(--accent2);
+    border-radius: 0 4px 4px 0;
+  }
+  .ja-para[data-label="caption"] {
+    font-size: 11px; line-height: 1.7; color: var(--muted);
+    font-style: italic; margin: 6px 0;
+  }
+  .ja-para[data-label="formula"] {
+    text-align: center; font-family: ui-monospace, monospace;
+    background: var(--panel2); padding: 8px; border-radius: 4px; margin: 8px 0;
+  }
+  /* 切り出した数式画像 (元ページの白地をそのまま貼るので白背景で囲う) */
+  .formula-img {
+    display: block; margin: 0 auto; max-width: 100%;
+    background: #fff; padding: 4px 6px; border-radius: 3px;
+    cursor: zoom-in;
+  }
+  .ja-para[data-label="table"] {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    background: var(--panel2); padding: 4px 8px; border-radius: 4px;
+  }
+  .ja-para[data-label="footnote"] {
+    font-size: 11px; color: var(--muted); margin: 2px 0;
+  }
+  .ja-para[data-label="references"] {
+    font-size: 12px; color: var(--muted); margin: 2px 0;
+    padding-left: 1em; text-indent: -1em;
+  }
+  .ja-para[data-label="list"] {
+    padding-left: 1.2em; margin: 4px 0;
+  }
+  /* 文(インライン) */
+  .ja-sent {
+    display: inline;
+    padding: 1px 2px; margin: 0;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .ja-sent:hover { background: rgba(74, 158, 255, 0.28); }
+  .ja-sent.active {
+    background: rgba(255, 212, 121, 0.55);
+    box-shadow: 0 0 0 1px rgba(255, 150, 0, 0.7);
+  }
+  .ja-sent.pending { color: #888; font-style: italic; }
+  .ja-sent.cited {
+    background: rgba(107, 214, 168, 0.30) !important;
+    box-shadow: 0 0 0 1px rgba(107, 214, 168, 0.7);
+  }
+  .cite-link {
+    color: var(--accent2); text-decoration: underline dotted;
+    cursor: pointer; font-size: 0.85em; margin: 0 1px;
+  }
+  .cite-link:hover { color: var(--hi); }
+  .cite-web {
+    color: var(--accent); font-size: 0.85em;
+    padding: 0 3px; background: rgba(74,158,255,0.15); border-radius: 3px;
+  }
+  /* 本文中の <sup>N</sup> クリック可能スタイル */
+  .cite-ref {
+    color: var(--accent); text-decoration: underline dotted; cursor: pointer;
+  }
+  .cite-ref:hover { color: var(--hi); background: rgba(74,158,255,0.15); border-radius: 2px; }
+  /* 参考文献ポップアップの検索ボタン */
+  .ref-search-btn {
+    display: inline-block; padding: 4px 10px; font-size: 11px;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; text-decoration: none; cursor: pointer;
+  }
+  .ref-search-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+  .ref-search-btn.primary { background: var(--accent2); color: #041a12; border-color: var(--accent2); font-weight: 600; }
+  .ref-search-btn.primary:hover { filter: brightness(1.1); }
+  /* references 段落 */
+  .ja-para[data-label="references"] {
+    font-size: 12px; line-height: 1.5; color: var(--muted);
+    padding: 4px 6px; margin: 4px 0;
+    border-left: 2px solid var(--border);
+  }
+  /* 元の src が "1. Author..." 形式なので prefix は付けない */
+  /* 参考文献 popup */
+  .ref-popup {
+    position: fixed; width: 480px; max-height: 280px;
+    background: var(--panel); border: 1px solid var(--accent2);
+    border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,0.6);
+    z-index: 200; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .ref-popup.hidden { display: none; }
+  .cite-web-link {
+    color: #6bd6a8; font-size: 0.85em; text-decoration: underline dotted;
+    padding: 0 3px; background: rgba(107,214,168,0.12); border-radius: 3px; margin: 0 1px;
+    cursor: pointer;
+  }
+  .cite-web-link:hover { background: rgba(107,214,168,0.25); }
+  .web-sources {
+    margin-top: 12px; padding: 10px 12px;
+    background: rgba(107,214,168,0.06);
+    border-left: 3px solid var(--accent2);
+    border-radius: 4px; font-size: 0.85em;
+  }
+  .web-sources-title { font-weight: 700; margin-bottom: 6px; color: var(--accent2); }
+  .web-sources ol { margin: 0; padding-left: 24px; }
+  .web-sources li { margin-bottom: 6px; }
+  .web-sources a { color: var(--accent2); text-decoration: underline; }
+  .web-snippet {
+    font-size: 0.9em; color: var(--muted); margin-top: 2px;
+    max-height: 2.6em; overflow: hidden;
+  }
+  .ja-sent sup, .ja-sent sub {
+    font-size: 0.72em; line-height: 0;
+  }
+  .ja-sent sup { vertical-align: super; }
+  .ja-sent sub { vertical-align: sub; }
+  .ja-sent b { font-weight: 700; color: #fff; }
+  .ja-sent i { font-style: italic; }
+
+  .fig-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .fig-section h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--accent2); }
+  .figure {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; margin-bottom: 10px; display: flex; gap: 12px; align-items: center;
+  }
+  .figure img {
+    max-width: 240px; max-height: 200px; background: #fff; border-radius: 4px;
+    object-fit: contain; cursor: pointer;
+  }
+  .figure .fnum {
+    font-size: 12px; color: var(--muted); font-weight: 600;
+    min-width: 60px;
+  }
+
+  .badge { display: inline-block; background: var(--panel2); color: var(--muted); border-radius: 4px; padding: 1px 7px; font-size: 11px; margin-right: 4px; }
+  .err { color: var(--danger); }
+
+  .modal-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:100; align-items:center; justify-content:center; }
+  .modal-bg.show { display:flex; }
+  .modal-bg img { max-width:95vw; max-height:95vh; }
+
+  /* 右クリックメニュー */
+  .ctx-menu {
+    display: none; position: fixed; z-index: 200;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 5px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    min-width: 180px; padding: 4px 0; font-size: 13px;
+    user-select: none;
+  }
+  .ctx-menu.show { display: block; }
+  .ctx-menu > div {
+    padding: 6px 12px; cursor: pointer;
+  }
+  .ctx-menu > div:hover:not(.ctx-sep) { background: var(--accent); color: white; }
+  .ctx-menu .ctx-sep {
+    height: 1px; background: var(--border); margin: 4px 0;
+    cursor: default;
+  }
+
+  /* チャット欄 (画面下部に常時固定) */
+  .chat-section {
+    position: fixed;
+    left: 16px; right: 16px; bottom: 8px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden;
+    z-index: 40;
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.4);
+    max-height: 45vh;
+    display: flex; flex-direction: column;
+  }
+  .chat-head {
+    padding: 6px 12px; background: var(--panel2); border-bottom: 1px solid var(--border);
+    font-size: 12px; color: var(--accent2);
+    display: flex; align-items: center; justify-content: space-between;
+    flex: 0 0 auto;
+  }
+  .chat-body { padding: 6px 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .chat-body.collapsed { display: none; }
+  .chat-messages {
+    flex: 1 1 auto; min-height: 60px; max-height: 32vh;
+    overflow: auto;
+    background: #0f1116; border-radius: 5px; padding: 8px;
+    font-size: 13px; line-height: 1.6;
+    margin-bottom: 6px;
+  }
+  .chat-messages:empty::before {
+    content: "まだメッセージはありません"; color: var(--muted); font-style: italic;
+  }
+  .chat-msg { margin-bottom: 10px; }
+  .chat-msg .who {
+    font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace;
+    margin-bottom: 2px;
+  }
+  .chat-msg.user .who { color: var(--accent); }
+  .chat-msg.assistant .who { color: var(--accent2); }
+  .chat-msg .body { white-space: pre-wrap; word-break: break-word; }
+  .chat-input-row { display: flex; gap: 8px; align-items: flex-end; }
+  .chat-input-row textarea {
+    flex: 1; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px;
+    font-size: 13px; font-family: inherit; resize: vertical; min-height: 40px;
+  }
+
+  @media (max-width: 900px) {
+    .split { grid-template-columns: 1fr; height: auto; }
+    .pane { max-height: 70vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>PDF VL Assistant</h1>
+  <label style="font-size:12px;color:var(--muted)">📂 保存ジョブ
+    <select id="savedJobs" style="font-size:12px;max-width:280px"></select>
+  </label>
+  <button id="loadJobBtn" class="ghost" style="font-size:12px">読込</button>
+  <button id="deleteJobBtn" class="ghost" style="font-size:12px;color:var(--danger)">削除</button>
+  <button id="showComments" class="ghost" style="font-size:12px">💬 コメント一覧</button>
+  <input type="file" id="suppFile" accept="application/pdf" style="display:none">
+  <button id="suppBtn" class="ghost" style="font-size:12px" title="サプリメンタル PDF を追加解析">📎 サプリ追加</button>
+  <button id="llmBtn" class="ghost" style="font-size:12px" title="使用する LLM の確認・切替・追加">🧠 モデル管理</button>
+  <div class="status" id="status">準備完了</div>
+</header>
+
+<div class="modal-bg" id="llmModal">
+  <div class="modal-inner">
+    <h3 style="margin:0 0 10px 0;color:var(--accent2)">🧠 モデル管理</h3>
+    <div id="llmStatusBox" class="llm-status">確認中...</div>
+
+    <h4 class="llm-h">インストール済み</h4>
+    <div id="llmLocalList" class="llm-list">探索中...</div>
+
+    <h4 class="llm-h">追加できるモデル（視覚対応）</h4>
+    <div id="llmDlBox" style="display:none"></div>
+    <div id="llmCatalogList" class="llm-list"></div>
+
+    <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
+      <span id="llmHint" style="font-size:11px;color:var(--muted)"></span>
+      <div>
+        <button id="llmRefresh" class="ghost">再探索</button>
+        <button id="llmClose" class="ghost">閉じる</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div class="section uploader" id="uploader">
+    <div class="row">
+      <input type="file" id="file" accept="application/pdf">
+      <label>モデル <select id="model"></select></label>
+      <label>最大ページ数 (0=全) <input type="number" id="maxpages" value="0" min="0" style="width:70px"></label>
+      <button id="submit">解析開始</button>
+      <button id="cancel" class="danger" style="display:none">中止</button>
+      <span style="font-size:11px;color:var(--muted)">PDFをドラッグ&ドロップ可</span>
+      <div class="progress-inline" id="progressInline" style="display:none;flex:1;min-width:220px;">
+        <div style="display:flex;gap:8px;align-items:center;font-size:12px;">
+          <span id="progressText" style="color:var(--muted);">開始中...</span>
+        </div>
+        <div class="bar"><div id="progressBar" style="width:0%"></div></div>
+        <div class="stage-line" id="stageLine" style="font-size:10px;"></div>
+        <div class="stage-line" id="statsLine" style="font-size:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="reader" class="hidden">
+    <div class="nav" id="pageNav">
+      <button id="prevBtn" class="ghost">◀ 前へ</button>
+      <div class="page-info"><span id="curPageNo">-</span> / <span id="totalPageNo">-</span></div>
+      <button id="nextBtn" class="ghost">次へ ▶</button>
+      <input type="number" id="jumpInput" min="1" placeholder="ジャンプ">
+      <button id="jumpBtn" class="ghost">移動</button>
+      <label style="margin-left:8px"><input type="checkbox" id="autoFollow" checked> 新ページに自動追従</label>
+      <div class="spacer"></div>
+      <div class="page-status" id="pageStatus"></div>
+    </div>
+    <div class="split">
+      <div class="pane">
+        <div class="pane-head">
+          <span>PDFページ</span>
+          <span style="display:flex;gap:6px;align-items:center;font-size:11px;">
+            <button id="pdfZoomOut" class="ghost" title="縮小 (Ctrl+ホイール)">−</button>
+            <span id="pdfZoomLabel" style="min-width:44px;text-align:center;">100%</span>
+            <button id="pdfZoomIn" class="ghost" title="拡大 (Ctrl+ホイール)">+</button>
+            <button id="pdfZoomReset" class="ghost" title="等倍">⤢</button>
+            <span id="pdfHint" style="color:var(--muted);margin-left:8px;">Ctrl+ホイールで拡大縮小</span>
+          </span>
+        </div>
+        <div class="pane-body" id="pdfBody">
+          <div class="pdf-outer">
+            <div class="pdf-container" id="pdfContainer">
+              <img id="pageImg" alt="PDF page">
+              <svg id="pageOverlay"></svg>
+              <div id="figOverlay" class="fig-overlay" style="display:none;">
+                <div class="fig-ov-header">
+                  <span id="figOvTitle">Fig.</span>
+                  <div class="fig-ov-tools">
+                    <button id="figOvZoomOut" class="ghost" title="縮小">🔍−</button>
+                    <button id="figOvZoomIn" class="ghost" title="拡大">🔍+</button>
+                    <button id="figOvReset" class="ghost" title="等倍">⤢</button>
+                    <button id="figOvClose" class="ghost" title="閉じる">✕</button>
+                  </div>
+                </div>
+                <div id="figOvViewport" class="fig-ov-viewport">
+                  <img id="figOvImg" class="fig-ov-img" draggable="false">
+                </div>
+                <div id="figOvCaption" class="fig-ov-caption"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="pane-head">
+          <span>日本語訳</span>
+          <span id="jaHint"></span>
+        </div>
+        <div class="pane-body" id="jaBody">
+          <div id="jaFlow" class="ja-flow"></div>
+          <div class="fig-section" id="figSection" style="display:none">
+            <h3>このページの図</h3>
+            <div id="figList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section id="chatSection" class="chat-section">
+    <div class="chat-head">
+      <span>💬 質問チャット (このページの内容に基づいて回答)</span>
+      <button id="chatToggle" class="ghost">折り畳み</button>
+    </div>
+    <div class="chat-body" id="chatBody">
+      <div class="chat-messages" id="chatMessages"></div>
+      <div class="chat-input-row">
+        <label style="font-size:11px;color:var(--muted)">
+          範囲 <select id="chatScope">
+            <option value="all" selected>全ページ</option>
+            <option value="page">現在のページのみ</option>
+          </select>
+        </label>
+        <label style="font-size:11px;color:var(--muted)">
+          <input type="checkbox" id="chatWeb"> 🌐 Web検索も使う
+        </label>
+        <textarea id="chatInput" placeholder="このページの内容について質問..." rows="2"></textarea>
+        <button id="chatSend">送信</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="modal-bg" id="modal" onclick="this.classList.remove('show')">
+  <img id="modalImg" src="">
+</div>
+
+<div class="ctx-menu" id="ctxMenu">
+  <div data-action="retranslate">🔄 再翻訳</div>
+  <div data-action="merge-prev">← 前の文と結合</div>
+  <div data-action="merge-next">次の文と結合 →</div>
+  <div data-action="split">✂ 分割...</div>
+  <div class="ctx-sep"></div>
+  <div data-action="comment">💬 コメントを追加/編集</div>
+  <div data-action="copy-src">📋 原文をコピー</div>
+</div>
+
+<div id="commentsList">
+  <div class="cl-head">
+    <h3>💬 コメント一覧</h3>
+    <button id="closeCommentsList" class="ghost">閉じる</button>
+  </div>
+  <div class="cl-body" id="commentsBody">まだコメントはありません</div>
+</div>
+
+<div id="refPopup" class="ref-popup hidden">
+  <div style="padding:6px 10px; background:rgba(107,214,168,0.14); border-bottom:1px solid var(--border); font-size:12px; font-weight:600; color:var(--accent2); display:flex; justify-content:space-between; align-items:center;">
+    <span id="refPopupTitle">参考文献</span>
+    <button id="refPopupClose" class="ghost" style="padding:2px 8px; font-size:12px;">✕</button>
+  </div>
+  <div id="refPopupBody" style="padding:10px 12px; font-size:12px; line-height:1.6; color:var(--text); overflow-y:auto; max-height:160px; white-space:normal;"></div>
+  <div id="refPopupSearch" style="padding:6px 10px; border-top:1px solid var(--border); display:flex; gap:6px; flex-wrap:wrap;"></div>
+</div>
+
+<div class="modal-bg" id="commentModal">
+  <div class="modal-inner">
+    <h3 style="margin: 0 0 8px 0; color: var(--accent2);">💬 コメント</h3>
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 8px;" id="commentTargetInfo"></p>
+    <textarea id="commentTextarea" rows="5" placeholder="コメントを入力..." style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:8px;font-size:13px;"></textarea>
+    <div style="margin-top: 10px; display: flex; justify-content: space-between;">
+      <button id="commentDelete" class="danger" style="display:none">削除</button>
+      <span></span>
+      <div>
+        <button id="commentCancel" class="ghost">キャンセル</button>
+        <button id="commentSave">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="figModal">
+  <div class="modal-inner" style="background: var(--panel); padding: 20px; border-radius: 8px; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; gap: 10px;">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <h3 style="margin: 0; color: var(--accent2);" id="figModalTitle">Fig.</h3>
+      <button id="figModalClose" class="ghost">閉じる</button>
+    </div>
+    <div id="figSingleView" style="display: flex; flex-direction: column; gap: 8px;">
+      <img id="figModalImg" style="max-width: 80vw; max-height: 45vh; background: #fff; object-fit: contain;">
+      <div id="figModalCaption" style="max-height: 30vh; overflow: auto; font-size: 13px; white-space: pre-wrap; color: var(--text); background: var(--panel2); padding: 10px 14px; border-radius: 5px; border-left: 3px solid var(--accent2); display: none;"></div>
+    </div>
+    <div id="figGalleryView" style="display: none; max-width: 80vw; max-height: 65vh; overflow: auto;"></div>
+    <div id="figModalNav" style="text-align: center; color: var(--muted); font-size: 12px;"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="retransModal">
+  <div style="background: var(--panel); padding: 20px; border-radius: 8px; max-width: 640px; width: 92%;">
+    <h3 style="margin: 0 0 8px 0; color: var(--accent2);">🔄 再翻訳オプション</h3>
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 12px;">
+      追加指示なしで再翻訳する場合は「そのまま再翻訳」を押してください。
+    </p>
+    <div id="retransCurrentBox" style="background:var(--panel2);padding:8px 10px;border-radius:4px;margin-bottom:10px;font-size:12px;max-height:80px;overflow:auto;">
+      <div style="color:var(--muted);margin-bottom:2px;">現在の訳:</div>
+      <div id="retransCurrentJa" style="color:var(--text);"></div>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:10px;cursor:pointer;">
+      <input type="checkbox" id="retransAvoidPrev"> 前と違う訳にする (別の表現・語彙で)
+    </label>
+    <div style="margin-bottom:10px;">
+      <label style="display:block;font-size:13px;margin-bottom:4px;">用語集 (任意)</label>
+      <div style="color:var(--muted);font-size:11px;margin-bottom:4px;">
+        1行に1件、`英単語 → 訳語` の形式で指定。例: <code>filament → フィラメント</code>
+      </div>
+      <textarea id="retransGlossary" rows="4" placeholder="例:&#10;filament → フィラメント&#10;peptidase → ペプチダーゼ" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:8px;font-family:ui-monospace,monospace;font-size:12px;"></textarea>
+    </div>
+    <div style="text-align: right;">
+      <button id="retransCancel" class="ghost">キャンセル</button>
+      <button id="retransConfirm">再翻訳を実行</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="splitModal">
+  <div style="background: var(--panel); padding: 20px; border-radius: 8px; max-width: 700px; width: 90%;">
+    <h3 style="margin: 0 0 8px 0; color: var(--accent2);">分割位置を指定</h3>
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 8px;">分割したい位置に <code>|</code> を挿入してください (複数可)</p>
+    <textarea id="splitTextarea" rows="6" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:8px;font-family:ui-monospace,monospace;font-size:13px;"></textarea>
+    <div style="margin-top: 10px; text-align: right;">
+      <button id="splitCancel" class="ghost">キャンセル</button>
+      <button id="splitConfirm">分割して再翻訳</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const els = {
+  status: $('status'),
+  uploader: $('uploader'),
+  file: $('file'),
+  model: $('model'),
+  maxpages: $('maxpages'),
+  submit: $('submit'),
+  cancel: $('cancel'),
+  progressWrap: $('progressInline'),  // 解析開始ボタンの横に表示するインライン版
+  progressText: $('progressText'),
+  progressBar: $('progressBar'),
+  stageLine: $('stageLine'),
+  statsLine: $('statsLine'),
+  reader: $('reader'),
+  prevBtn: $('prevBtn'),
+  nextBtn: $('nextBtn'),
+  jumpInput: $('jumpInput'),
+  jumpBtn: $('jumpBtn'),
+  autoFollow: $('autoFollow'),
+  curPageNo: $('curPageNo'),
+  totalPageNo: $('totalPageNo'),
+  pageStatus: $('pageStatus'),
+  pdfBody: $('pdfBody'),
+  pdfContainer: $('pdfContainer'),
+  pdfZoomIn: $('pdfZoomIn'),
+  pdfZoomOut: $('pdfZoomOut'),
+  pdfZoomReset: $('pdfZoomReset'),
+  pdfZoomLabel: $('pdfZoomLabel'),
+  pdfHint: $('pdfHint'),
+  pageImg: $('pageImg'),
+  pageOverlay: $('pageOverlay'),
+  jaFlow: $('jaFlow'),
+  figSection: $('figSection'),
+  figList: $('figList'),
+  modal: $('modal'),
+  ctxMenu: $('ctxMenu'),
+  splitModal: $('splitModal'),
+  splitTextarea: $('splitTextarea'),
+  splitCancel: $('splitCancel'),
+  splitConfirm: $('splitConfirm'),
+  retransModal: $('retransModal'),
+  retransCurrentJa: $('retransCurrentJa'),
+  retransAvoidPrev: $('retransAvoidPrev'),
+  retransGlossary: $('retransGlossary'),
+  retransCancel: $('retransCancel'),
+  retransConfirm: $('retransConfirm'),
+  chatSection: $('chatSection'),
+  chatBody: $('chatBody'),
+  chatToggle: $('chatToggle'),
+  chatMessages: $('chatMessages'),
+  chatInput: $('chatInput'),
+  chatSend: $('chatSend'),
+  chatScope: $('chatScope'),
+  chatWeb: $('chatWeb'),
+  showComments: $('showComments'),
+  suppFile: $('suppFile'),
+  suppBtn: $('suppBtn'),
+  llmBtn: $('llmBtn'),
+  llmModal: $('llmModal'),
+  llmStatusBox: $('llmStatusBox'),
+  llmLocalList: $('llmLocalList'),
+  llmCatalogList: $('llmCatalogList'),
+  llmDlBox: $('llmDlBox'),
+  llmRefresh: $('llmRefresh'),
+  llmClose: $('llmClose'),
+  llmHint: $('llmHint'),
+  savedJobs: $('savedJobs'),
+  loadJobBtn: $('loadJobBtn'),
+  deleteJobBtn: $('deleteJobBtn'),
+  commentsList: $('commentsList'),
+  closeCommentsList: $('closeCommentsList'),
+  commentsBody: $('commentsBody'),
+  commentModal: $('commentModal'),
+  commentTextarea: $('commentTextarea'),
+  commentTargetInfo: $('commentTargetInfo'),
+  commentDelete: $('commentDelete'),
+  commentCancel: $('commentCancel'),
+  commentSave: $('commentSave'),
+  figModal: $('figModal'),
+  figModalTitle: $('figModalTitle'),
+  figModalImg: $('figModalImg'),
+  figModalCaption: $('figModalCaption'),
+  figModalNav: $('figModalNav'),
+  figModalClose: $('figModalClose'),
+  figOverlay: $('figOverlay'),
+  figOvTitle: $('figOvTitle'),
+  figOvViewport: $('figOvViewport'),
+  figOvImg: $('figOvImg'),
+  figOvCaption: $('figOvCaption'),
+  figOvZoomIn: $('figOvZoomIn'),
+  figOvZoomOut: $('figOvZoomOut'),
+  figOvReset: $('figOvReset'),
+  figOvClose: $('figOvClose'),
+  refPopup: $('refPopup'),
+  refPopupTitle: $('refPopupTitle'),
+  refPopupBody: $('refPopupBody'),
+  refPopupSearch: $('refPopupSearch'),
+  refPopupClose: $('refPopupClose'),
+  figSingleView: $('figSingleView'),
+  figGalleryView: $('figGalleryView'),
+  modalImg: $('modalImg'),
+};
+
+// アプリ状態
+let currentJobId = null;
+let jobStartTime = 0;
+let pageStartTime = 0;
+let statsTimer = null;
+// サプリ解析の進捗 (本編とは別に数える)
+let suppProgress = {done: 0, total: 0};
+const completedPageTimes = [];
+let totalPages = 0;
+let currentPageNo = 1;
+let pagesData = []; // インデックスされたページの配列 (page_no順)
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// -------- モデル一覧 --------
+// -------- 保存済みジョブ一覧 & 再ロード --------
+async function refreshSavedJobs(autoResumeIfRunning=false) {
+  try {
+    const r = await fetch('/api/jobs');
+    const j = await r.json();
+    els.savedJobs.innerHTML = '<option value="">-- 選択 --</option>';
+    const jobs = j.jobs || [];
+    // ドロップダウン(新しい順)
+    for (const jb of jobs) {
+      const opt = document.createElement('option');
+      opt.value = jb.id;
+      const at = jb.created_at ? new Date(jb.created_at * 1000).toLocaleString('ja-JP', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '?';
+      opt.textContent = `${at} · ${jb.filename || '?'} (${jb.status}, ${jb.total_pages || '?'}p)`;
+      els.savedJobs.appendChild(opt);
+    }
+    // 実行中ジョブがあれば自動接続
+    if (autoResumeIfRunning) {
+      const running = jobs.find(x => ['queued','running','cancelling'].includes(x.status)
+                                     || x.supplement_status === 'processing');
+      if (running) {
+        await loadSavedJob(running.id, {resumeStream: true});
+      }
+    }
+  } catch (e) { console.warn('refreshSavedJobs failed', e); }
+}
+
+async function loadSavedJob(jobId, opts={}) {
+  try {
+    const r = await fetch(`/api/job/${jobId}`);
+    if (!r.ok) throw new Error(await r.text());
+    const job = await r.json();
+    currentJobId = jobId;
+    els.status.textContent = `ジョブ ${jobId} (${job.status})`;
+    els.progressWrap.style.display = '';
+    els.progressText.textContent = `${job.filename || '?'} - ${job.status}, ${job.total_pages || '?'}ページ`;
+    els.progressBar.style.width = '100%';
+    totalPages = job.total_pages || 0;
+    pagesData = job.pages || [];
+    completedPageTimes.length = 0;
+    for (const p of pagesData) if (p.status === 'done' && typeof p.elapsed === 'number') completedPageTimes.push(p.elapsed);
+    currentPageNo = 1;
+    onPagesReady();
+    const isRunning = ['queued','running','cancelling'].includes(job.status)
+                      || job.supplement_status === 'processing';
+    setRunning(isRunning);
+    // 実行中のジョブを開いたときは常に配信に繋ぎ、終わったページから順に反映する。
+    // 終わったジョブなら前の配信を閉じる (裏で走っているジョブの更新が混ざらないように)。
+    if (isRunning) subscribe(jobId);
+    else closeStream();
+    els.savedJobs.value = jobId;
+    flash(isRunning ? `ジョブ ${jobId} を読込 (解析中・自動更新)` : `ジョブ ${jobId} を読込`);
+  } catch (e) {
+    flash('ジョブ読込失敗: ' + e, true);
+  }
+}
+
+els.loadJobBtn.addEventListener('click', () => {
+  const id = els.savedJobs.value;
+  if (id) loadSavedJob(id);
+});
+
+els.deleteJobBtn.addEventListener('click', async () => {
+  const id = els.savedJobs.value;
+  if (!id) return;
+  if (!confirm(`ジョブ ${id} をディスクから削除しますか?(この操作は取り消せません)`)) return;
+  try {
+    const r = await fetch(`/api/job/${id}`, {method: 'DELETE'});
+    if (!r.ok) throw new Error(await r.text());
+    if (id === currentJobId) currentJobId = null;
+    flash('削除しました');
+    await refreshSavedJobs();
+  } catch (e) { flash('削除失敗: ' + e, true); }
+});
+
+async function tryResumeJob() {
+  await refreshSavedJobs(true);
+}
+
+async function loadModels() {
+  try {
+    const r = await fetch('/api/models');
+    const j = await r.json();
+    els.model.innerHTML = '';
+    const sorted = j.models.slice().sort((a,b) => {
+      const av = /vl/i.test(a) ? 0 : 1, bv = /vl/i.test(b) ? 0 : 1;
+      if (av !== bv) return av - bv;
+      // MoEっぽいものを優先(30b)
+      const am = /:30b/i.test(a) ? 0 : 1, bm = /:30b/i.test(b) ? 0 : 1;
+      return am - bm;
+    });
+    for (const m of sorted) {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m;
+      if (m === j.default) o.selected = true;
+      els.model.appendChild(o);
+    }
+    if (!j.models.includes(j.default)) {
+      const o = document.createElement('option');
+      o.value = j.default; o.textContent = j.default + ' (未DL)';
+      o.selected = true; els.model.prepend(o);
+    }
+  } catch (e) { els.status.textContent = 'モデル一覧取得失敗: ' + e; }
+}
+loadModels();
+tryResumeJob();
+
+// -------- 時間フォーマット --------
+function fmtDur(sec) {
+  if (!isFinite(sec) || sec < 0) return '--';
+  if (sec < 60) return sec.toFixed(1) + 's';
+  const m = Math.floor(sec/60), s = Math.floor(sec%60);
+  return `${m}m${s.toString().padStart(2,'0')}s`;
+}
+function fmtClock(d) {
+  const p = (n) => n.toString().padStart(2,'0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function computeEta() {
+  const n = completedPageTimes.length;
+  if (n === 0) return null;
+  let avg;
+  if (n <= 3) avg = completedPageTimes.reduce((a,b)=>a+b,0) / n;
+  else {
+    const recent = completedPageTimes.slice(-3), older = completedPageTimes.slice(0, -3);
+    avg = recent.reduce((a,b)=>a+b,0)/recent.length * 0.7
+        + older.reduce((a,b)=>a+b,0)/older.length * 0.3;
+  }
+  const remainingAfter = Math.max(0, totalPages - currentPageNo);
+  let curRemain = 0;
+  if (currentPageNo > 0 && pageStartTime > 0) {
+    const el = (Date.now() - pageStartTime) / 1000;
+    curRemain = Math.max(0, avg - el);
+  }
+  return { avg, remaining: curRemain + remainingAfter * avg, samples: n };
+}
+
+// -------- Drag & drop --------
+['dragenter','dragover'].forEach(e => els.uploader.addEventListener(e, ev => {
+  ev.preventDefault(); els.uploader.classList.add('drag');
+}));
+['dragleave','drop'].forEach(e => els.uploader.addEventListener(e, ev => {
+  ev.preventDefault(); els.uploader.classList.remove('drag');
+}));
+els.uploader.addEventListener('drop', e => {
+  const f = e.dataTransfer.files[0];
+  if (f) els.file.files = e.dataTransfer.files;
+});
+
+// -------- 実行状態切替 --------
+function setRunning(running) {
+  if (running) {
+    els.submit.style.display = 'none';
+    els.cancel.style.display = ''; els.cancel.disabled = false; els.cancel.textContent = '中止';
+  } else {
+    els.submit.style.display = ''; els.submit.disabled = false;
+    els.cancel.style.display = 'none';
+    // currentJobId は保持: 完了後もチャット・再翻訳・編集で使う。
+    // 次回アップロード時に上書きされる。
+  }
+}
+
+els.cancel.addEventListener('click', async () => {
+  if (!currentJobId) return;
+  if (!confirm('現在の解析を中止しますか？途中結果は残ります。')) return;
+  els.cancel.disabled = true; els.cancel.textContent = '中止中...';
+  try { await fetch('/api/job/' + currentJobId + '/cancel', {method:'POST'}); }
+  catch (e) { els.stageLine.innerHTML = '<span class="err">中止要求失敗: ' + e + '</span>'; }
+});
+
+els.submit.addEventListener('click', async () => {
+  const f = els.file.files[0];
+  if (!f) { alert('PDFを選択してください'); return; }
+  // 状態リセット
+  completedPageTimes.length = 0;
+  totalPages = 0; currentPageNo = 1; pageStartTime = 0;
+  pagesData = [];
+  els.progressWrap.style.display = '';
+  els.reader.classList.add('hidden');
+  els.jaFlow.innerHTML = ''; els.figList.innerHTML = ''; els.figSection.style.display = 'none';
+  els.progressText.textContent = 'アップロード中...'; els.progressBar.style.width = '0%';
+  els.stageLine.textContent = ''; els.statsLine.textContent = '';
+  setRunning(true);
+
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('max_pages', els.maxpages.value || '0');
+  fd.append('model', els.model.value);
+
+  let jobId;
+  try {
+    const r = await fetch('/api/upload', {method:'POST', body: fd});
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    jobId = j.job_id; currentJobId = jobId;
+    els.status.textContent = 'ジョブ ' + jobId;
+    // 即時プレビュー: ページ1を今すぐ表示
+    if (j.total_pages) {
+      totalPages = j.total_pages;
+      els.totalPageNo.textContent = totalPages;
+      els.jumpInput.max = totalPages;
+    }
+    if (j.preview_page1) {
+      pagesData[0] = j.preview_page1;
+      currentPageNo = 1;
+      els.reader.classList.remove('hidden');
+      renderCurrentPage();
+      els.stageLine.innerHTML = `<span class="k">P1</span> 即時表示(翻訳前)`;
+    }
+  } catch (e) {
+    els.progressText.innerHTML = '<span class="err">アップロード失敗: ' + e + '</span>';
+    setRunning(false); return;
+  }
+  subscribe(jobId);
+});
+
+// -------- ページナビ --------
+els.prevBtn.addEventListener('click', () => userNav(currentPageNo - 1));
+els.nextBtn.addEventListener('click', () => userNav(currentPageNo + 1));
+els.jumpBtn.addEventListener('click', () => {
+  const v = parseInt(els.jumpInput.value); if (isFinite(v)) userNav(v);
+});
+els.jumpInput.addEventListener('keydown', e => { if (e.key === 'Enter') els.jumpBtn.click(); });
+document.addEventListener('keydown', e => {
+  if (e.target && ['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { userNav(currentPageNo - 1); e.preventDefault(); }
+  else if (e.key === 'ArrowRight' || e.key === 'PageDown') { userNav(currentPageNo + 1); e.preventDefault(); }
+});
+
+// ユーザーが手動でナビしたら自動追従は解除
+function userNav(n) {
+  if (els.autoFollow.checked) {
+    els.autoFollow.checked = false;
+  }
+  gotoPage(n);
+}
+
+function gotoPage(n) {
+  if (!pagesData.length) return;
+  n = Math.max(1, Math.min(totalPages, n));
+  if (n === currentPageNo && pagesData[n-1] && pagesData[n-1]._rendered) return;
+  currentPageNo = n;
+  renderCurrentPage();
+}
+
+// -------- ページ描画 --------
+function updatePageStatus() {
+  const p = pagesData[currentPageNo - 1];
+  if (!p) { els.pageStatus.textContent = ''; return; }
+  els.curPageNo.textContent = currentPageNo;
+  els.totalPageNo.textContent = totalPages;
+  const statusMap = {
+    done: `完了 (${p.elapsed || '?'}s)`,
+    processing: '翻訳中...',
+    pending: p.image_url ? '翻訳待ち' : 'ページ準備中',
+  };
+  els.pageStatus.textContent = statusMap[p.status] || p.status || '';
+}
+
+function renderCurrentPage() {
+  const p = pagesData[currentPageNo - 1];
+  if (!p) return;
+  updatePageStatus();
+  // ページ切り替え時に figure overlay を閉じる
+  if (els.figOverlay && els.figOverlay.style.display !== 'none') closeFigOverlay();
+  // ズーム倍率を適用
+  applyPdfZoom();
+
+  // 画像未生成なら仮表示(nav 更新のみ)
+  if (!p.image_url) {
+    els.pageImg.removeAttribute('src');
+    els.pageOverlay.innerHTML = '';
+    els.jaFlow.innerHTML = '';
+    els.figSection.style.display = 'none';
+    return;
+  }
+
+  els.pageImg.src = p.image_url;
+  els.pageImg.dataset.pageNo = p.page_no;
+  els.pageOverlay.setAttribute('viewBox', `0 0 ${p.image_width} ${p.image_height}`);
+  els.pageOverlay.innerHTML = '';
+  // 文単位の矩形群(1文が複数行にまたがる場合、複数の rect を同じ data-i で作成)
+  for (const b of (p.blocks || [])) {
+    const rects = b.rects_px || (b.bbox_px ? [b.bbox_px] : []);
+    for (const [x0,y0,x1,y1] of rects) {
+      const rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('x', x0); rect.setAttribute('y', y0);
+      rect.setAttribute('width', Math.max(1, x1-x0));
+      rect.setAttribute('height', Math.max(1, y1-y0));
+      rect.setAttribute('class', 'block-rect');
+      rect.setAttribute('data-i', b.i);
+      rect.addEventListener('mouseenter', () => hoverBlock(b.i, true));
+      rect.addEventListener('mouseleave', () => hoverBlock(b.i, false));
+      rect.addEventListener('click', (ev) => { ev.stopPropagation(); selectBlocks([b.i]); });
+      els.pageOverlay.appendChild(rect);
+    }
+  }
+  // 右パネル
+  renderJaPanel(p);
+  attachDragSelect();
+  p._rendered = true;
+}
+
+// <sup>/<sub>/<b>/<i> のみ許可する簡易サニタイザ
+function renderSubSup(text) {
+  const esc = String(text || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return esc
+    .replace(/&lt;sup&gt;/gi, '<sup>').replace(/&lt;\/sup&gt;/gi, '</sup>')
+    .replace(/&lt;sub&gt;/gi, '<sub>').replace(/&lt;\/sub&gt;/gi, '</sub>')
+    .replace(/&lt;b&gt;/gi, '<b>').replace(/&lt;\/b&gt;/gi, '</b>')
+    .replace(/&lt;i&gt;/gi, '<i>').replace(/&lt;\/i&gt;/gi, '</i>');
+}
+
+function renderJaPanel(p) {
+  els.jaFlow.innerHTML = '';
+  const blocks = p.blocks || [];
+  // references ラベルのブロックは番号 (^N. ) 基準でまとめて再グループ化する
+  // (自動分節が中途半端に切ってしまうため表示時に修正)
+  const groups = [];
+  let curPid = null, curLabel = null, curArr = null;
+  let refBucket = null;  // 現在集約中の reference エントリ (label==references)
+  const refStartRe = /^\s*(\d+)\.\s/;
+  for (const b of blocks) {
+    const pid = (b.p != null) ? b.p : b.i;
+    const lbl = b.label || 'body';
+    if (lbl === 'references') {
+      const srcPlain = (b.src || '').replace(/<[^>]+>/g, '');
+      const m = srcPlain.match(refStartRe);
+      if (m) {
+        // 新しい参考文献エントリの開始
+        refBucket = { pid: b.i, sents: [b], label: 'references', refNum: m[1] };
+        groups.push(refBucket);
+        curPid = b.i; curLabel = 'references';
+      } else if (refBucket) {
+        // 既存エントリの続き
+        refBucket.sents.push(b);
+      } else {
+        // 先頭が数字始まりでない孤立ブロック — 単独グループ
+        refBucket = { pid: b.i, sents: [b], label: 'references', refNum: null };
+        groups.push(refBucket);
+        curPid = b.i; curLabel = 'references';
+      }
+      continue;
+    }
+    // references 以外は従来通り (p, label) グループ化
+    refBucket = null;
+    if (pid !== curPid || lbl !== curLabel) {
+      curPid = pid; curLabel = lbl;
+      curArr = { pid, sents: [], label: b.label || null };
+      groups.push(curArr);
+    }
+    curArr.sents.push(b);
+  }
+  for (const g of groups) {
+    const para = document.createElement('div');
+    para.className = 'ja-para';
+    if (g.label) para.setAttribute('data-label', g.label);
+    if (g.refNum) para.setAttribute('data-ref-num', g.refNum);
+    for (let k = 0; k < g.sents.length; k++) {
+      const b = g.sents[k];
+      const span = document.createElement('span');
+      // 数式は文字として組み直せないので、元ページから切り出した画像をそのまま貼る
+      if (b.img) {
+        span.className = 'ja-sent';
+        span.setAttribute('data-i', b.i);
+        const im = document.createElement('img');
+        im.className = 'formula-img';
+        im.src = b.img;
+        im.alt = (b.src || '').replace(/<[^>]+>/g, '');
+        if (b.img_w) im.style.maxWidth = Math.round(b.img_w / 3) + 'px';
+        im.addEventListener('click', ev => {
+          els.modalImg.src = ev.target.src; els.modal.classList.add('show');
+        });
+        span.appendChild(im);
+        span.addEventListener('mouseenter', () => hoverBlock(b.i, true));
+        span.addEventListener('mouseleave', () => hoverBlock(b.i, false));
+        para.appendChild(span);
+        continue;
+      }
+      span.className = 'ja-sent' + (b.ja ? '' : ' pending');
+      if (b.comment) span.classList.add('has-comment');
+      span.setAttribute('data-i', b.i);
+      const rendered = b.ja ? renderSubSup(b.ja) : '(翻訳待ち)';
+      // references 以外の本文には citation マーカーをクリック可能に
+      let html = wrapFigReferences(rendered);
+      if (g.label !== 'references') html = wrapCitations(html);
+      span.innerHTML = html;
+      // コメントアイコン
+      if (b.comment) {
+        const mk = document.createElement('span');
+        mk.className = 'comment-marker';
+        mk.textContent = '💬';
+        mk.title = b.comment;
+        span.appendChild(mk);
+      }
+      span.addEventListener('mouseenter', () => hoverBlock(b.i, true));
+      span.addEventListener('mouseleave', () => hoverBlock(b.i, false));
+      span.addEventListener('click', () => selectBlocks([b.i]));
+      para.appendChild(span);
+      if (k < g.sents.length - 1) para.appendChild(document.createTextNode(' '));
+    }
+    els.jaFlow.appendChild(para);
+  }
+  // 図
+  if (p.figures && p.figures.length) {
+    els.figSection.style.display = '';
+    els.figList.innerHTML = '';
+    for (const f of p.figures) {
+      if (!f.url) continue;
+      const div = document.createElement('div');
+      div.className = 'figure';
+      const num = f.figure_number ? `<div class="fnum">${f.figure_number}</div>` : '';
+      div.innerHTML = `${num}<img src="${f.url}">`;
+      div.querySelector('img').addEventListener('click', ev => {
+        els.modalImg.src = ev.target.src; els.modal.classList.add('show');
+      });
+      els.figList.appendChild(div);
+    }
+  } else {
+    els.figSection.style.display = 'none';
+    els.figList.innerHTML = '';
+  }
+}
+
+function hoverBlock(i, on) {
+  els.pageOverlay.querySelectorAll(`rect[data-i="${i}"]`).forEach(r => r.classList.toggle('active', on));
+  const card = els.jaFlow.querySelector(`.ja-sent[data-i="${i}"]`);
+  if (card) card.classList.toggle('active', on);
+}
+
+function selectBlocks(indices) {
+  els.pageOverlay.querySelectorAll('.block-rect.active').forEach(r => r.classList.remove('active'));
+  els.jaFlow.querySelectorAll('.ja-sent.active').forEach(c => c.classList.remove('active'));
+  for (const i of indices) {
+    els.pageOverlay.querySelectorAll(`rect[data-i="${i}"]`).forEach(r => r.classList.add('active'));
+    const card = els.jaFlow.querySelector(`.ja-sent[data-i="${i}"]`);
+    if (card) card.classList.add('active');
+  }
+  if (indices.length) {
+    const first = els.jaFlow.querySelector(`.ja-sent[data-i="${indices[0]}"]`);
+    if (first) first.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+}
+
+// -------- ドラッグ選択 --------
+function attachDragSelect() {
+  const svg = els.pageOverlay;
+  let dragging = false, startX = 0, startY = 0, selRect = null;
+
+  function svgCoords(evt) {
+    const rect = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const x = (evt.clientX - rect.left) * (vb.width / rect.width);
+    const y = (evt.clientY - rect.top) * (vb.height / rect.height);
+    return { x, y };
+  }
+
+  svg.onmousedown = (e) => {
+    if (e.button !== 0) return;
+    dragging = true;
+    const p = svgCoords(e); startX = p.x; startY = p.y;
+    if (selRect) selRect.remove();
+    selRect = document.createElementNS(SVG_NS, 'rect');
+    selRect.setAttribute('class', 'selection-rect');
+    selRect.setAttribute('x', startX); selRect.setAttribute('y', startY);
+    selRect.setAttribute('width', 0); selRect.setAttribute('height', 0);
+    svg.appendChild(selRect);
+    e.preventDefault();
+  };
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const p = svgCoords(e);
+    const x = Math.min(startX, p.x), y = Math.min(startY, p.y);
+    const w = Math.abs(p.x - startX), h = Math.abs(p.y - startY);
+    if (selRect) {
+      selRect.setAttribute('x', x); selRect.setAttribute('y', y);
+      selRect.setAttribute('width', w); selRect.setAttribute('height', h);
+    }
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (!dragging) return;
+    dragging = false;
+    const p = svgCoords(e);
+    const x0 = Math.min(startX, p.x), y0 = Math.min(startY, p.y);
+    const x1 = Math.max(startX, p.x), y1 = Math.max(startY, p.y);
+    // 面積が極小(クリック相当)なら空選択に(単一ブロックはrect click側で処理)
+    if ((x1-x0) < 4 && (y1-y0) < 4) {
+      // クリア
+      selectBlocks([]);
+      if (selRect) { selRect.remove(); selRect = null; }
+      return;
+    }
+    // 交差する文を集める(複数矩形のいずれかが交差すればhit)
+    const page = pagesData[currentPageNo - 1];
+    const hit = [];
+    for (const b of (page.blocks || [])) {
+      const rects = b.rects_px || (b.bbox_px ? [b.bbox_px] : []);
+      let hitBlock = false;
+      for (const [bx0, by0, bx1, by1] of rects) {
+        if (bx1 < x0 || bx0 > x1 || by1 < y0 || by0 > y1) continue;
+        hitBlock = true; break;
+      }
+      if (hitBlock) hit.push(b.i);
+    }
+    selectBlocks(hit);
+    if (selRect) { selRect.remove(); selRect = null; }
+  });
+  // ページ外クリックで選択クリア
+  els.pdfBody.addEventListener('click', (e) => {
+    if (e.target === els.pdfBody || e.target.classList.contains('pdf-outer')) selectBlocks([]);
+  });
+}
+
+// -------- SSE購読 --------
+function subscribe(jobId) {
+  els.progressText.textContent = '解析中...';
+  jobStartTime = Date.now();
+  if (statsTimer) clearInterval(statsTimer);
+  statsTimer = setInterval(() => {
+    const totalEl = (Date.now() - jobStartTime) / 1000;
+    const curEl = pageStartTime ? (Date.now() - pageStartTime) / 1000 : 0;
+    const eta = computeEta();
+    let etaHtml;
+    if (!eta) etaHtml = `<span class="k">推定</span> 1ページ目を計測中...`;
+    else {
+      const at = new Date(Date.now() + eta.remaining * 1000);
+      etaHtml = `<span class="k">残り</span> <span class="t">${fmtDur(eta.remaining)}</span>` +
+                ` (推定終了 <span class="t">${fmtClock(at)}</span>, 平均 ${fmtDur(eta.avg)}/page, n=${eta.samples})`;
+    }
+    els.statsLine.innerHTML =
+      `<span class="k">経過</span> 全体 <span class="t">${fmtDur(totalEl)}</span>` +
+      (curEl ? ` / このページ <span class="t">${fmtDur(curEl)}</span>` : '') +
+      ` &nbsp;|&nbsp; ${etaHtml}`;
+  }, 250);
+
+  closeStream();  // 別ジョブのイベントが混ざらないよう前の接続を閉じる
+  const es = new EventSource('/api/job/' + jobId + '/stream');
+  es.onmessage = (ev) => {
+    if (jobId !== currentJobId) return;  // 表示中のジョブ以外のイベントは無視
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    handleEvent(d);
+  };
+  es.onerror = () => {};
+  window._es = es;
+}
+
+function closeStream() {
+  if (window._es) { try { window._es.close(); } catch (e) {} window._es = null; }
+  if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+}
+
+function handleEvent(d) {
+  switch (d.type) {
+    case 'snapshot': {
+      const job = d.job;
+      totalPages = job.total_pages || 0;
+      if (job.pages && job.pages.length) {
+        pagesData = job.pages.map(p => ({...p}));
+        onPagesReady();
+        for (const p of pagesData) if (p.status === 'done') recordCompleted(p);
+        // 全体要約は撤去済み
+        els.progressBar.style.width = totalPages ? (completedPageTimes.length/totalPages*100).toFixed(1) + '%' : '0%';
+        els.progressText.textContent = `完了 ${completedPageTimes.length}/${totalPages}`;
+      }
+      // 既に終わったジョブなら SSE を即クローズし、UI も待機状態へ
+      // (本編が完了でもサプリ解析中なら繋いだままにする)
+      if (['done','error','cancelled'].includes(job.status)
+          && job.supplement_status !== 'processing') {
+        if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+        setRunning(false);
+        if (window._es) window._es.close();
+        if (job.status === 'done') els.progressText.textContent = `完了 (${totalPages}ページ, 再接続表示)`;
+        else if (job.status === 'cancelled') els.progressText.innerHTML = `<span class="err">前回中止されたジョブ</span>`;
+        else els.progressText.innerHTML = `<span class="err">エラー: ${job.error || ''}</span>`;
+      }
+      break;
+    }
+    case 'phase': {
+      els.stageLine.innerHTML = `<span class="k">phase</span> ${d.msg}`;
+      if (d.phase === 'supplement' && d.supp_total) {
+        suppProgress = {done: 0, total: d.supp_total};
+        els.progressWrap.style.display = '';
+        els.progressBar.style.width = '0%';
+        els.progressText.textContent = `サプリ 完了 0/${d.supp_total}`;
+        setRunning(true);
+      }
+      break;
+    }
+    case 'supplement_done': {
+      els.progressBar.style.width = '100%';
+      els.progressText.textContent =
+        `サプリ解析 完了 (${suppProgress.total || '?'}ページ, 全体 ${d.total_pages}ページ)`;
+      totalPages = d.total_pages;
+      els.totalPageNo.textContent = totalPages;
+      els.jumpInput.max = totalPages;
+      if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+      setRunning(false);
+      closeStream();
+      refreshSavedJobs();
+      break;
+    }
+    case 'job_meta': {
+      // 総ページ数のみ先行して受け取り(nav側の準備)
+      totalPages = d.total_pages;
+      els.totalPageNo.textContent = totalPages;
+      els.jumpInput.max = totalPages;
+      break;
+    }
+    case 'page_indexed': {
+      // ページ画像+ブロックが揃った(翻訳前)。逐次追加。
+      const p = d.page;
+      pagesData[p.index] = {...p};
+      // 最初のページが来たらリーダー表示
+      els.reader.classList.remove('hidden');
+      // 自動追従がONで、まだ何も見ていない or 前のページを見ているなら、この新ページへ移動
+      if (els.autoFollow.checked && p.page_no > currentPageNo) {
+        currentPageNo = p.page_no;
+        renderCurrentPage();
+      } else if (currentPageNo === p.page_no) {
+        renderCurrentPage();
+      }
+      els.stageLine.innerHTML = `<span class="k">P${p.page_no}</span> インデックス完了 (${(p.blocks||[]).length}ブロック)`;
+      break;
+    }
+    case 'page_start': {
+      totalPages = d.total; pageStartTime = Date.now();
+      if (d.supp_total) {
+        // サプリはページ番号が本編の続きになるので、サプリ内での進捗として表示する
+        suppProgress.total = d.supp_total;
+        els.progressText.textContent =
+          `サプリ ${d.supp_page} / ${d.supp_total} を翻訳中 (完了 ${suppProgress.done}/${d.supp_total}) · 全体 P${d.page}`;
+        els.progressBar.style.width = ((d.supp_page-1)/d.supp_total*100).toFixed(1) + '%';
+      } else {
+      els.progressText.textContent = `ページ ${d.page} / ${d.total} を翻訳中 (完了 ${completedPageTimes.length}/${d.total})`;
+      els.progressBar.style.width = ((d.page-1)/d.total*100).toFixed(1) + '%';
+      }
+      if (pagesData[d.page-1]) pagesData[d.page-1].status = 'processing';
+      if (currentPageNo === d.page) updatePageStatus();
+      break;
+    }
+    case 'stage': {
+      els.stageLine.innerHTML = `<span class="k">P${d.page||'-'}</span> ${d.msg}`;
+      break;
+    }
+    case 'page_translate_progress': {
+      const cp = d.completed != null ? ` [${d.completed}/${d.total}ブロック完]` : '';
+      els.stageLine.innerHTML = `<span class="k">P${d.page}</span> 翻訳生成中 <span class="t">${d.elapsed}s</span> / ${d.chars}文字${cp}`;
+      break;
+    }
+    case 'page_translate_partial': {
+      // ブロック単位で逐次更新: 該当ページのカードを部分的に埋める
+      const p = pagesData[d.page-1];
+      if (!p) break;
+      for (const ob of d.blocks) {
+        const src = (p.blocks||[]).find(x => x.i === ob.i);
+        if (src) src.ja = ob.ja;
+      }
+      if (currentPageNo === d.page) {
+        for (const ob of d.blocks) {
+          const span = els.jaFlow.querySelector(`.ja-sent[data-i="${ob.i}"]`);
+          if (span) {
+            span.classList.remove('pending');
+            span.innerHTML = renderSubSup(ob.ja);
+          }
+        }
+      }
+      break;
+    }
+    case 'page_translate_done': {
+      const p = pagesData[d.page-1];
+      if (p) {
+        for (const ob of d.blocks) {
+          const src = (p.blocks||[]).find(x => x.i === ob.i);
+          if (src) src.ja = ob.ja;
+        }
+        p.llm_elapsed = d.elapsed;
+      }
+      els.stageLine.innerHTML = `<span class="k">P${d.page}</span> 翻訳完了 <span class="t">${d.elapsed}s</span>`;
+      // 自動追従: 翻訳完了ページに移動(既に表示中なら差分更新のみ)
+      if (els.autoFollow.checked && d.page > currentPageNo) {
+        currentPageNo = d.page;
+        renderCurrentPage();
+      } else if (currentPageNo === d.page) {
+        renderJaPanel(p);
+      }
+      break;
+    }
+    case 'figure_done': {
+      const p = pagesData[d.page-1];
+      if (!p) break;
+      while (p.figures.length < d.fig_index) p.figures.push({url:''});
+      p.figures[d.fig_index-1] = {
+        url: d.url,
+        caption: d.caption || '',
+        figure_number: d.figure_number || null,
+        kind: d.kind || 'figure',
+      };
+      if (currentPageNo === d.page) renderJaPanel(p);
+      break;
+    }
+    case 'page_done': {
+      const p = pagesData[d.page-1];
+      if (p) {
+        // d.entry には図情報などが含まれる。ブロックはそのまま維持
+        const savedBlocks = p.blocks;
+        Object.assign(p, d.entry);
+        p.blocks = savedBlocks;
+        recordCompleted(p);
+      }
+      if (d.supp_total) {
+        suppProgress.total = d.supp_total;
+        suppProgress.done = d.supp_page;
+        els.progressBar.style.width = (d.supp_page/d.supp_total*100).toFixed(1) + '%';
+        els.progressText.textContent = `サプリ 完了 ${d.supp_page}/${d.supp_total}`;
+      } else {
+        els.progressBar.style.width = (d.page/totalPages*100).toFixed(1) + '%';
+        els.progressText.textContent = `完了 ${completedPageTimes.length}/${totalPages}`;
+      }
+      pageStartTime = 0;
+      if (currentPageNo === d.page) { renderJaPanel(p); updatePageStatus(); }
+      break;
+    }
+    case 'structure_start': {
+      els.stageLine.innerHTML = `<span class="k">P${d.page}</span> 構造解析中(VL)`;
+      break;
+    }
+    case 'structure_done': {
+      els.stageLine.innerHTML = `<span class="k">P${d.page}</span> 構造補正 <span class="t">${d.elapsed}s</span>` +
+        (d.excluded ? ` / 除外 ${d.excluded}` : '') +
+        (d.merged ? ` / 統合 ${d.merged}` : '');
+      // ページデータを更新
+      const p = pagesData[d.page-1];
+      if (p && d.entry) {
+        Object.assign(p, d.entry);
+        if (currentPageNo === d.page) renderCurrentPage();
+      }
+      break;
+    }
+    case 'done': {
+      els.progressText.textContent = `完了 (${totalPages}ページ, 合計 ${fmtDur((Date.now()-jobStartTime)/1000)})`;
+      els.progressBar.style.width = '100%';
+      if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+      setRunning(false);
+      if (window._es) window._es.close();
+      refreshSavedJobs();
+      break;
+    }
+    case 'cancelled': {
+      els.progressText.innerHTML = `<span class="err">中止しました</span> (処理済 ${completedPageTimes.length}/${totalPages||'?'})`;
+      if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+      setRunning(false);
+      if (window._es) window._es.close();
+      break;
+    }
+    case 'error': {
+      els.progressText.innerHTML = '<span class="err">エラー: ' + d.message + '</span>';
+      if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+      setRunning(false);
+      if (window._es) window._es.close();
+      break;
+    }
+    case 'error_soft': {
+      els.stageLine.innerHTML = `<span class="err">P${d.page} エラー: ${d.msg}</span>`;
+      break;
+    }
+    case 'debug': {
+      console.log(`[debug P${d.page}] ${d.kind}:`, d.text || '');
+      if (d.kind === 'structure_raw' || d.kind === 'structure_json') {
+        els.stageLine.innerHTML = `<span class="k">P${d.page}</span> ${d.kind}: <code style="font-size:11px">${(d.text||'').slice(0,180).replace(/</g,'&lt;')}</code>`;
+      }
+      break;
+    }
+  }
+}
+
+function recordCompleted(p) {
+  if (typeof p.elapsed === 'number' && !p._recorded) {
+    completedPageTimes.push(p.elapsed);
+    p._recorded = true;
+  }
+}
+
+function onPagesReady() {
+  if (!pagesData.length) return;
+  els.reader.classList.remove('hidden');
+  els.totalPageNo.textContent = totalPages;
+  els.jumpInput.max = totalPages;
+  if (!currentPageNo || currentPageNo > totalPages) currentPageNo = 1;
+  // 最初に画像URLが揃ったページへ移動(スナップショット再接続時)
+  const firstReady = pagesData.findIndex(p => p && p.image_url);
+  if (firstReady >= 0 && !pagesData[currentPageNo-1]?.image_url) currentPageNo = firstReady + 1;
+  renderCurrentPage();
+}
+
+// (全体要約は撤去)
+
+// -------- 右クリックメニュー --------
+let ctxTargetI = null;
+
+document.addEventListener('contextmenu', (e) => {
+  const sent = e.target.closest('.ja-sent');
+  if (!sent) return;
+  e.preventDefault();
+  ctxTargetI = parseInt(sent.getAttribute('data-i'));
+  const menu = els.ctxMenu;
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.classList.add('show');
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.ctx-menu')) els.ctxMenu.classList.remove('show');
+});
+
+els.ctxMenu.addEventListener('click', async (e) => {
+  const action = e.target.getAttribute('data-action');
+  if (!action || ctxTargetI == null || !currentJobId) return;
+  els.ctxMenu.classList.remove('show');
+  const p = pagesData[currentPageNo - 1];
+  const block = (p?.blocks || []).find(b => b.i === ctxTargetI);
+  if (!block) return;
+
+  if (action === 'copy-src') {
+    const plain = String(block.src || '').replace(/<[^>]+>/g, '');
+    try { await navigator.clipboard.writeText(plain); flash('原文をコピーしました'); }
+    catch (err) { alert('コピー失敗: ' + err); }
+    return;
+  }
+
+  if (action === 'retranslate') {
+    // オプション付きダイアログを開く
+    els.retransCurrentJa.textContent = String(block.ja || '(未翻訳)').replace(/<[^>]+>/g, '');
+    els.retransAvoidPrev.checked = false;
+    // 用語集は前回の入力を保持 (localStorage)
+    try { els.retransGlossary.value = localStorage.getItem('retransGlossary') || ''; }
+    catch { els.retransGlossary.value = ''; }
+    els.retransModal.classList.add('show');
+    _retransTargetI = ctxTargetI;
+    return;
+  }
+
+  if (action === 'merge-prev' || action === 'merge-next') {
+    if (!confirm(`${action === 'merge-prev' ? '前' : '次'}の文と結合して再翻訳しますか?`)) return;
+    setSentStatus(ctxTargetI, '編集中...');
+    try {
+      const r = await fetch(`/api/job/${currentJobId}/edit`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({page: currentPageNo, i: ctxTargetI, action: action.replace('-', '_')}),
+      });
+      const j = await r.json();
+      if (j.ok) flash('編集+再翻訳 完了'); else flash('編集失敗: ' + (j.error || '?'), true);
+      // structure_done イベントで自動再描画される
+    } catch (err) { flash('編集エラー: ' + err, true); }
+    return;
+  }
+
+  if (action === 'split') {
+    els.splitTextarea.value = (block.src || '').replace(/<[^>]+>/g, '');
+    els.splitModal.classList.add('show');
+    els.splitTextarea.focus();
+    return;
+  }
+});
+
+els.splitCancel.addEventListener('click', () => els.splitModal.classList.remove('show'));
+els.splitModal.addEventListener('click', (e) => {
+  if (e.target === els.splitModal) els.splitModal.classList.remove('show');
+});
+els.splitConfirm.addEventListener('click', async () => {
+  const edited = els.splitTextarea.value;
+  if (!edited.includes('|')) { alert('分割位置に | を入れてください'); return; }
+  els.splitModal.classList.remove('show');
+  setSentStatus(ctxTargetI, '分割+再翻訳中...');
+  try {
+    const r = await fetch(`/api/job/${currentJobId}/edit`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({page: currentPageNo, i: ctxTargetI, action: 'split', split_edited: edited}),
+    });
+    const j = await r.json();
+    if (j.ok) flash(`分割+再翻訳 完了 (${j.updated}文)`);
+    else flash('分割失敗: ' + (j.error || '?'), true);
+  } catch (err) { flash('分割エラー: ' + err, true); }
+});
+
+// 再翻訳ダイアログ
+let _retransTargetI = null;
+els.retransCancel.addEventListener('click', () => els.retransModal.classList.remove('show'));
+els.retransModal.addEventListener('click', (e) => {
+  if (e.target === els.retransModal) els.retransModal.classList.remove('show');
+});
+els.retransConfirm.addEventListener('click', async () => {
+  if (_retransTargetI == null || !currentJobId) { els.retransModal.classList.remove('show'); return; }
+  const targetI = _retransTargetI;
+  const avoid = els.retransAvoidPrev.checked;
+  const glossary = els.retransGlossary.value.trim();
+  // 用語集を localStorage に保存 (次回もデフォ表示)
+  try { localStorage.setItem('retransGlossary', glossary); } catch {}
+  els.retransModal.classList.remove('show');
+  const p = pagesData[currentPageNo - 1];
+  const block = (p?.blocks || []).find(b => b.i === targetI);
+  if (!block) return;
+  setSentStatus(targetI, '再翻訳中...');
+  try {
+    const r = await fetch(`/api/job/${currentJobId}/retranslate`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        page: currentPageNo, i: targetI,
+        avoid_previous: avoid,
+        glossary: glossary || null,
+      }),
+    });
+    const j = await r.json();
+    if (j.ok) { flash('再翻訳完了'); block.ja = j.ja; refreshSentence(targetI); }
+    else { flash('再翻訳失敗: ' + (j.error || '?'), true); refreshSentence(targetI); }
+  } catch (err) { flash('再翻訳エラー: ' + err, true); refreshSentence(targetI); }
+});
+
+function setSentStatus(i, msg) {
+  const span = els.jaFlow.querySelector(`.ja-sent[data-i="${i}"]`);
+  if (!span) return;
+  span.classList.add('pending');
+  span.textContent = msg;
+}
+
+function refreshSentence(i) {
+  const p = pagesData[currentPageNo - 1];
+  if (!p) return;
+  const block = (p.blocks || []).find(b => b.i === i);
+  if (!block) return;
+  const span = els.jaFlow.querySelector(`.ja-sent[data-i="${i}"]`);
+  if (span) {
+    span.classList.remove('pending');
+    span.innerHTML = renderSubSup(block.ja || '(翻訳待ち)');
+  }
+}
+
+// -------- 一時通知 --------
+function flash(msg, isError) {
+  const div = document.createElement('div');
+  div.style.cssText = `position:fixed;bottom:20px;right:20px;padding:10px 16px;
+    background:${isError ? 'var(--danger)' : 'var(--accent2)'};color:#000;
+    border-radius:5px;z-index:300;font-size:13px;font-weight:600;
+    box-shadow:0 4px 12px rgba(0,0,0,0.4);`;
+  div.textContent = msg;
+  document.body.appendChild(div);
+  setTimeout(() => div.remove(), 3000);
+}
+
+// -------- チャット --------
+els.chatToggle.addEventListener('click', () => {
+  els.chatBody.classList.toggle('collapsed');
+  els.chatToggle.textContent = els.chatBody.classList.contains('collapsed') ? '展開' : '折り畳み';
+});
+
+els.chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); els.chatSend.click(); }
+});
+
+els.chatSend.addEventListener('click', async () => {
+  const msg = els.chatInput.value.trim();
+  if (!msg) return;
+  if (!currentJobId) { flash('先にPDFを解析してください', true); return; }
+  els.chatInput.value = '';
+  addChatMsg('user', msg);
+  const asstEl = addChatMsg('assistant', '(応答中...)');
+  const asstBody = asstEl.querySelector('.body');
+  els.chatSend.disabled = true;
+  try {
+    const r = await fetch(`/api/job/${currentJobId}/chat`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: msg,
+        page: currentPageNo,
+        scope: els.chatScope.value,
+        web: els.chatWeb.checked,
+      }),
+    });
+    if (r.status === 404) {
+      asstBody.textContent = '⚠️ サーバー側でジョブが見つかりません。サーバ再起動で状態が失われた可能性があります。\n\n対処: 履歴からジョブを再ロードするか、PDFを再アップロードしてください。';
+      currentJobId = null;
+      await refreshSavedJobs();
+      els.chatSend.disabled = false;
+      return;
+    }
+    if (!r.ok) throw new Error(await r.text());
+    // ストリーミングでテキストを受信
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let acc = '';
+    let webSources = [];
+    let metaExtracted = false;
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      acc += decoder.decode(value, {stream: true});
+      // 先頭の [WEB_META]...[/WEB_META] を抽出 (先頭に来るのは最初のバイトから)
+      if (!metaExtracted && acc.startsWith('[WEB_META]')) {
+        const end = acc.indexOf('[/WEB_META]');
+        if (end > 0) {
+          try {
+            const meta = JSON.parse(acc.slice(10, end));
+            webSources = meta.sources || [];
+          } catch (e) { console.warn('web meta parse fail', e); }
+          acc = acc.slice(end + '[/WEB_META]'.length).replace(/^\n/, '');
+          metaExtracted = true;
+        }
+      } else if (!metaExtracted && !acc.startsWith('[')) {
+        metaExtracted = true;  // メタなし
+      }
+      asstBody.textContent = acc;
+      els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+    }
+    if (!acc) asstBody.textContent = '(空応答)';
+    // 引用マーカー [P<n>S<i>] を解析 → ソース文をハイライト
+    highlightChatCitations(acc, asstBody, webSources);
+  } catch (e) {
+    asstBody.textContent = 'エラー: ' + e;
+  } finally { els.chatSend.disabled = false; }
+});
+
+// 引用ハイライト
+let currentCitedIndices = new Set(); // "P{n}S{i}" のセット
+function highlightChatCitations(answer, msgBodyEl, webSources) {
+  webSources = webSources || [];
+  const webMap = new Map();
+  webSources.forEach(s => webMap.set(s.n, s));
+  // 既存ハイライトをクリア
+  document.querySelectorAll('.ja-sent.cited').forEach(el => el.classList.remove('cited'));
+  currentCitedIndices.clear();
+
+  // 引用マーカー抽出: [P1S3][P2S5] や [W1] を検出
+  const re = /\[(P(\d+)S(\d+)|W(\d+))\]/g;
+  const pageCitations = new Map(); // page -> Set of i
+  const usedWebN = new Set();
+  let m;
+  while ((m = re.exec(answer)) !== null) {
+    if (m[2] && m[3]) {
+      const pg = parseInt(m[2]);
+      const i = parseInt(m[3]);
+      if (!pageCitations.has(pg)) pageCitations.set(pg, new Set());
+      pageCitations.get(pg).add(i);
+      currentCitedIndices.add(`P${pg}S${i}`);
+    } else if (m[4]) {
+      usedWebN.add(parseInt(m[4]));
+    }
+  }
+
+  // HTML エスケープ用
+  const esc = (s) => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // メッセージ本文の [P1S3] / [W1] をクリック可能・ツールチップ付きに
+  let html = answer.replace(/\[(P(\d+)S(\d+))\]/g,
+    '<a class="cite-link" data-page="$2" data-i="$3" href="#">[$1]</a>');
+  html = html.replace(/\[(W(\d+))\]/g, (m0, all, num) => {
+    const n = parseInt(num);
+    const src = webMap.get(n);
+    if (src) {
+      const title = esc(src.title || src.url || `Web ${n}`);
+      const url = esc(src.url || '#');
+      const tip = esc((src.title || '') + '\n' + (src.snippet || '').slice(0, 200));
+      return `<a class="cite-web-link" href="${url}" target="_blank" rel="noopener noreferrer" title="${tip}">[W${n}]</a>`;
+    }
+    return `<span class="cite-web">[W${n}]</span>`;
+  });
+  msgBodyEl.innerHTML = html;
+
+  // ソース欄を末尾に追加 (使われた Web ソースのみ)
+  if (webSources.length && usedWebN.size) {
+    const srcDiv = document.createElement('div');
+    srcDiv.className = 'web-sources';
+    let srcHtml = '<div class="web-sources-title">🌐 Web検索ソース</div><ol>';
+    webSources.forEach(s => {
+      if (!usedWebN.has(s.n)) return;
+      srcHtml += `<li>[W${s.n}] <a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a><div class="web-snippet">${esc((s.snippet||'').slice(0, 200))}</div></li>`;
+    });
+    srcHtml += '</ol>';
+    srcDiv.innerHTML = srcHtml;
+    msgBodyEl.appendChild(srcDiv);
+  }
+
+  msgBodyEl.querySelectorAll('.cite-link').forEach(a => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const pg = parseInt(a.getAttribute('data-page'));
+      const i = parseInt(a.getAttribute('data-i'));
+      if (pg !== currentPageNo) {
+        currentPageNo = pg;
+        renderCurrentPage();
+      }
+      setTimeout(() => selectBlocks([i]), 200);
+    });
+  });
+
+  // 現在ページの引用文にハイライトクラス付与
+  const p = pagesData[currentPageNo - 1];
+  if (p) {
+    const cites = pageCitations.get(currentPageNo);
+    if (cites) {
+      cites.forEach(i => {
+        const span = els.jaFlow.querySelector(`.ja-sent[data-i="${i}"]`);
+        if (span) span.classList.add('cited');
+      });
+    }
+  }
+}
+
+function addChatMsg(who, text) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + who;
+  div.innerHTML = `<div class="who">${who === 'user' ? 'あなた' : 'アシスタント'}</div><div class="body"></div>`;
+  div.querySelector('.body').textContent = text;
+  els.chatMessages.appendChild(div);
+  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+  return div;
+}
+
+// -------- Fig. # リンク --------
+function wrapFigReferences(html) {
+  // Fig. N / Figure N / Table N / 図N / 表N を検出してクリック可能に (Fig S1 等の Supplementary も対応)
+  // "Supplementary Table 3" のように番号に S が付かない書き方でも、サプリ側は
+  // "s3" として登録されるので接頭辞が付いていれば S を補う。
+  return html.replace(
+    /(Supplementary\s+|Suppl\.?\s*|Supp\.?\s*|補足\s*|副\s*)?(Fig(?:ure)?s?\.?|図|Table|Tab\.?|表|Scheme|Schem\.?)\s*(S?\d+[a-z]?(?:[-–]S?\d+[a-z]?)?)/gi,
+    (m, supp, kind, num) => {
+      let n = num.toLowerCase();
+      if (supp && !n.startsWith('s')) n = 's' + n;
+      return `<a class="fig-ref" data-fig-num="${n}" data-fig-kind="${kind.toLowerCase()}" href="#">${m}</a>`;
+    }
+  );
+}
+
+// <sup>1</sup> や <sup>1,2</sup> や <sup>1-3</sup> をクリック可能な引用リンクに変換
+function wrapCitations(html) {
+  return html.replace(/<sup>([\d,\s\-–]+)<\/sup>/g, (m, contents) => {
+    // 中の数字群を個別にクリック可能に
+    // 例: "1,2" → [1],[2] / "1-3" → [1,2,3] / "1,2-4" → [1],[2,3,4]
+    const nums = [];
+    for (const chunk of contents.split(/[,、]/)) {
+      const c = chunk.trim();
+      const rangeM = c.match(/^(\d+)\s*[-–]\s*(\d+)$/);
+      if (rangeM) {
+        const a = parseInt(rangeM[1]), b = parseInt(rangeM[2]);
+        for (let n = a; n <= b && n - a < 40; n++) nums.push(String(n));
+      } else if (/^\d+$/.test(c)) {
+        nums.push(c);
+      }
+    }
+    if (!nums.length) return m;
+    const inner = nums.map(n => `<a class="cite-ref" data-ref-num="${n}" href="#">${n}</a>`).join(',');
+    return `<sup>${inner}</sup>`;
+  });
+}
+
+// 参考文献 map を作成 (現在ページ + 全ページを対象)
+function buildRefMap() {
+  const map = new Map();
+  for (const p of pagesData) {
+    for (const b of (p.blocks || [])) {
+      if (b.label !== 'references') continue;
+      const srcPlain = (b.src || '').replace(/<[^>]+>/g, '');
+      const m = srcPlain.match(/^\s*(\d+)\.\s+/);
+      if (m) {
+        const num = m[1];
+        // 番号ヘッダから、次に続く数字ヘッダの直前までを結合
+        let combined = srcPlain;
+        // 同ページ内で連続 references ブロックを結合
+        const idx = p.blocks.indexOf(b);
+        for (let k = idx + 1; k < p.blocks.length; k++) {
+          const nb = p.blocks[k];
+          if (nb.label !== 'references') break;
+          const ns = (nb.src || '').replace(/<[^>]+>/g, '');
+          if (/^\s*\d+\.\s+/.test(ns)) break;
+          combined += ' ' + ns;
+        }
+        map.set(num, combined.replace(/\s+/g, ' ').trim());
+      }
+    }
+  }
+  return map;
+}
+
+// クリックした引用番号 → 参考文献 popup
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('.cite-ref');
+  if (!link) return;
+  e.preventDefault();
+  const num = link.getAttribute('data-ref-num');
+  showRefPopup(num, e.clientX, e.clientY);
+});
+
+function showRefPopup(num, mx, my) {
+  const refMap = buildRefMap();
+  const text = refMap.get(String(num));
+  const popup = els.refPopup;
+  const body = els.refPopupBody;
+  const searchArea = els.refPopupSearch;
+  if (!text) {
+    body.innerHTML = `<div style="color:var(--muted);">参考文献 [${num}] は見つかりません (References セクションが未処理か、番号不一致)</div>`;
+    searchArea.innerHTML = '';
+  } else {
+    body.textContent = text;
+    // タイトル抽出: 数字と著者名を除去して残りを検索クエリに
+    // 一般形式: "1. Authors. Title. Journal Vol, pages (Year)."
+    let q = text.replace(/^\s*\d+\.\s+/, '');
+    // DOI があれば直接開く
+    const doiM = q.match(/10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+/);
+    const doi = doiM ? doiM[0] : null;
+    // タイトル部だけを抜き出そうと試みる: 著者列 (最初の . まで) と Journal (最後の . 前) を除外
+    // 簡略化: 全文で検索
+    const qEnc = encodeURIComponent(q.slice(0, 300));
+    const buttons = [];
+    buttons.push(`<a class="ref-search-btn" href="https://scholar.google.com/scholar?q=${qEnc}" target="_blank" rel="noopener noreferrer">Google Scholar で検索</a>`);
+    buttons.push(`<a class="ref-search-btn" href="https://pubmed.ncbi.nlm.nih.gov/?term=${qEnc}" target="_blank" rel="noopener noreferrer">PubMed</a>`);
+    buttons.push(`<a class="ref-search-btn" href="https://www.google.com/search?q=${qEnc}" target="_blank" rel="noopener noreferrer">Google 検索</a>`);
+    if (doi) {
+      buttons.unshift(`<a class="ref-search-btn primary" href="https://doi.org/${encodeURIComponent(doi)}" target="_blank" rel="noopener noreferrer">DOI: ${doi}</a>`);
+    }
+    searchArea.innerHTML = buttons.join(' ');
+  }
+  els.refPopupTitle.textContent = `参考文献 [${num}]`;
+  popup.classList.remove('hidden');
+  // マウス位置周辺に配置 (画面外へ出ないようクランプ)
+  const w = 480, h = 260;
+  const winW = window.innerWidth, winH = window.innerHeight;
+  let px = (mx || winW/2) + 8, py = (my || winH/2) + 8;
+  if (px + w > winW) px = winW - w - 8;
+  if (py + h > winH) py = winH - h - 8;
+  if (px < 8) px = 8;
+  if (py < 8) py = 8;
+  popup.style.left = px + 'px';
+  popup.style.top = py + 'px';
+}
+
+document.addEventListener('click', (e) => {
+  // popup 外クリックで閉じる
+  if (!els.refPopup) return;
+  if (els.refPopup.classList.contains('hidden')) return;
+  if (e.target.closest('#refPopup') || e.target.closest('.cite-ref')) return;
+  els.refPopup.classList.add('hidden');
+});
+els.refPopupClose.addEventListener('click', () => { els.refPopup.classList.add('hidden'); });
+
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('.fig-ref');
+  if (!link) return;
+  e.preventDefault();
+  const num = link.getAttribute('data-fig-num');
+  const kind = link.getAttribute('data-fig-kind');
+  showFigure(num, kind);
+});
+
+function showFigure(figNum, kind) {
+  const targetKindIsTable = /table|表|tab/i.test(kind || '');
+  // "1c" / "S1c" のような組合せは base=1 or S1, sub=c と分解
+  const m = figNum.match(/^(S?\d+)([a-z])?/i);
+  const baseNum = m ? m[1].toLowerCase() : figNum.toLowerCase();
+  const subLetter = m && m[2] ? m[2].toLowerCase() : '';
+  const escNum = figNum.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escBase = baseNum.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const candidates = [];
+  for (const p of pagesData) {
+    for (const f of (p.figures || [])) {
+      const desc = String(f.description || '');
+      const fnum = String(f.figure_number || '').toLowerCase();
+      // 図と表は番号空間が別 (Figure 1 と Table 1 は別物) なので種別が違えば対象外
+      const fIsTable = (f.kind || 'figure') === 'table';
+      if (fIsTable !== targetKindIsTable) continue;
+      let score = 0;
+      // 1) figure_number 完全一致 (1c === 1c) が最優先
+      if (fnum === figNum) score = 10;
+      // 2) base 番号一致 (figure_number が "1" で要求が "1c")
+      else if (fnum === baseNum) score = 7;
+      // 3) 種別+完全番号 (Fig. 1c)
+      else if (new RegExp(`(?:${targetKindIsTable?'table|tab\\.?|表':'fig(?:ure)?s?\\.?|scheme|図'})\\s*${escNum}\\b`, 'i').test(desc)) score = 6;
+      // 4) 種別+base番号 (Fig. 1)
+      else if (new RegExp(`(?:${targetKindIsTable?'table|tab\\.?|表':'fig(?:ure)?s?\\.?|scheme|図'})\\s*${escBase}\\b`, 'i').test(desc)) score = 4;
+      // 5) 番号一致だけ
+      else if (new RegExp(`\\b${escNum}\\b`).test(desc)) score = 2;
+      else if (new RegExp(`\\b${escBase}\\b`).test(desc)) score = 1;
+      candidates.push({page: p.page_no, url: f.url, description: f.description, score, figure_number: f.figure_number});
+    }
+  }
+  candidates.sort((a,b) => b.score - a.score);
+  // 画像が見つからないときでも legend が取れるなら、それを表示する。
+  // 補足の表は「別の Excel ファイル」等で PDF 中に実体が無いことがあり、
+  // その場合に本文の図一覧を出しても意味がない。
+  if (!candidates.length || candidates[0].score === 0) {
+    const legend = findTranslatedFigureCaption(baseNum, targetKindIsTable);
+    if (legend) {
+      openFigOverlay({
+        title: `${kind || (targetKindIsTable ? 'Table' : 'Fig.')} ${figNum}`,
+        url: null,
+        caption: legend,
+        note: targetKindIsTable
+          ? '※ この表はPDF内に画像として含まれていません(別ファイル提供など)。説明のみ表示します。'
+          : '※ この図はPDF内から画像として取り出せませんでした。説明のみ表示します。',
+      });
+      return;
+    }
+  }
+  if (!candidates.length) {
+    flash(targetKindIsTable ? '表が抽出されていません (0枚)'
+                            : '図が抽出されていません (0枚)', true);
+    return;
+  }
+  if (candidates[0].score === 0) {
+    // 何も一致しないので全図ギャラリーに切替
+    return showFiguresGallery(kind, figNum);
+  }
+  const best = candidates[0];
+  // 対応するページの figure エントリから caption を取得 (フル情報)
+  const pageObj = pagesData.find(p => p.page_no === best.page);
+  const bestFig = (pageObj?.figures || []).find(f => f.url === best.url);
+  // 全ページのブロックから「Figure N:」で始まる翻訳済み文を探す
+  const translated = findTranslatedFigureCaption(baseNum, targetKindIsTable);
+  const caption = translated || bestFig?.caption || '';
+  openFigOverlay({
+    title: `${kind || (targetKindIsTable ? 'Table' : 'Fig.')} ${figNum} (P${best.page}${bestFig?.figure_number ? ' · ラベル: '+bestFig.figure_number : ''})`,
+    url: best.url,
+    caption: caption,
+  });
+}
+
+// Figure N: で始まるブロックを全ページから探して、次の Figure X: が現れるまでの
+// 連続する翻訳済みブロックを結合して返す (p 値には依存しない — サブパネル記述は
+// 別 p になることがある。ページ跨ぎも許容)
+// ブロックが横いっぱいに流れる文章か (表のセルは幅が狭いので false)
+function blockIsWide(b, page) {
+  const rects = b.rects_px || [];
+  if (!rects.length) return false;
+  const pw = page.image_width || 0;
+  if (!pw) return false;
+  return Math.max(...rects.map(r => r[2] - r[0])) >= pw * 0.4;
+}
+
+function findTranslatedFigureCaption(baseNum, isTable) {
+  const stripHtml = (s) => (s||'').replace(/<[^>]+>/g, '').trim();
+  const num = String(baseNum);
+  const numEsc = num.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&');
+  // 大文字小文字を区別しないと「番号の後に大文字の見出し語」の判定ができないので、
+  // i フラグを使わず語ごとに両方書く。
+  const pre = `(?:[Ss]upplementary\\s+|[Ss]uppl?\\.?\\s+|補足\\s*|副\\s*)`;
+  const word = isTable ? `(?:[Tt]able|[Tt]ab\\.?|表)` : `(?:[Ff]ig(?:ure)?\\.?|図)`;
+  const sep = `(?:\\s*[.:：|]|\\s+(?=[A-Z])|$)`;
+  // 補足の番号は、本体が "Supplementary Figure 3." と S 無しで書く場合がある
+  const body = /^s/i.test(num)
+    ? `(?:${pre}\\s*${word}\\s*[Ss]?${num.slice(1)}|${word}\\s*[Ss]${num.slice(1)})`
+    : `${pre}?${word}\\s*${numEsc}`;
+  const headRe = new RegExp(`^${body}(?:[a-z])?${sep}`);
+  // 「別」の Figure N: を検出する用 (=どんな番号でも Figure N: の始まりならストップ)
+  const anyFigHeadRe = new RegExp(`^${pre}?${word}\\s*[Ss]?\\d+(?:[a-z])?${sep}`);
+  // 主要見出しなら明確にセクション終了 → キャプション終端
+  const stopLabels = new Set(['heading', 'title', 'abstract_heading', 'references']);
+
+  let started = false, headP = null, headPage = null, headSize = 0;
+  const parts = [];
+  for (const page of pagesData) {
+    const blocks = page.blocks || [];
+    for (const b of blocks) {
+      const srcPlain = stripHtml(b.src || '');
+      if (!started) {
+        if (headRe.test(srcPlain)) {
+          started = true;
+          headP = b.p;
+          headPage = page.page_no;
+          headSize = b.font_size_px || 0;
+          parts.push(stripHtml(b.ja || b.src || ''));
+        }
+        continue;
+      }
+      // legend は同じ段落か、同じ大きさの文字で続く段落。加えて、見出しより小さい
+      // 文字で続く長い文章も legend の補足説明なので取り込む (表のセルは短いので入らない)。
+      const bSize = b.font_size_px || 0;
+      const sameSize = headSize && bSize && Math.abs(bSize - headSize) <= 0.6;
+      const smallerProse = headSize && bSize && bSize < headSize - 0.6
+        && srcPlain.length >= 40 && blockIsWide(b, page);
+      if (page.page_no !== headPage) return finishCaption(parts);
+      if (b.p !== headP && b.label !== 'caption' && !sameSize && !smallerProse) {
+        return finishCaption(parts);
+      }
+      // 取り込んだ段落を現在の段落にする (同じ段落の残りの文も続けて取り込む)
+      headP = b.p;
+      // 現在キャプション本文を蓄積中
+      if (anyFigHeadRe.test(srcPlain)) {
+        return finishCaption(parts);
+      }
+      if (stopLabels.has(b.label || '')) {
+        return finishCaption(parts);
+      }
+      parts.push(stripHtml(b.ja || b.src || ''));
+    }
+  }
+  return started ? finishCaption(parts) : null;
+
+  function finishCaption(arr) {
+    let text = arr.filter(Boolean).join(' ').trim();
+    // サブパネル (a)/(b)/(c)... の前で改行 (読みやすさ)
+    text = text.replace(/\s*\((a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t)\)\s*/gi, '\n($1) ');
+    return text.replace(/^\n+/, '').trim();
+  }
+}
+
+// PDF に重ねる figure overlay
+let _figOvState = { scale: 1, tx: 0, ty: 0, dragging: false, dragStartX: 0, dragStartY: 0 };
+
+// overlay を pdfBody の可視領域にフィットさせる (position: fixed で管理)
+function updateFigOverlayRect() {
+  if (els.figOverlay.style.display === 'none') return;
+  const rect = els.pdfBody.getBoundingClientRect();
+  els.figOverlay.style.position = 'fixed';
+  els.figOverlay.style.top = rect.top + 'px';
+  els.figOverlay.style.left = rect.left + 'px';
+  els.figOverlay.style.width = rect.width + 'px';
+  els.figOverlay.style.height = rect.height + 'px';
+}
+// resize は後段の PDF ズームハンドラでまとめて処理 (updateFigOverlayRect + resetFigOvView も含む)
+// pdfBody のスクロールで overlay 位置がズレないように、pdfBody を親に position: fixed
+// pdfBody 内スクロール中に位置追従したい場合はスクロールリスナーも追加
+document.addEventListener('DOMContentLoaded', () => {
+  if (els.pdfBody) els.pdfBody.addEventListener('scroll', updateFigOverlayRect);
+});
+
+function openFigOverlay({title, url, caption, note}) {
+  els.figOvTitle.textContent = title;
+  els.figOvCaption.textContent = (note ? note + '\n\n' : '') + (caption || '(キャプションなし)');
+  // オーバーレイを表示・位置合わせ (fixed で pdfBody にフィット)
+  els.figOverlay.style.display = '';
+  updateFigOverlayRect();
+  const img = els.figOvImg;
+  // 画像が無い場合 (PDF に図表の実体が無く legend だけある) はキャプションのみ表示
+  if (!url) {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+    els.figOvViewport.style.display = 'none';
+    return;
+  }
+  img.style.display = '';
+  els.figOvViewport.style.display = '';
+  // ロード中は画像を隠しておいて「大きい→小さい」チラツキを完全に防ぐ
+  img.style.visibility = 'hidden';
+  // 前回の transition が残らないよう即時反映モードで初期化
+  img.style.transition = 'none';
+  const finalize = () => {
+    // 1 フレーム待ってビューポートサイズが確定してから計算
+    requestAnimationFrame(() => {
+      resetFigOvView(true);  // instant: transition なし
+      img.style.visibility = '';
+      // 次回のズーム操作用に transition を復活
+      requestAnimationFrame(() => { img.style.transition = ''; });
+    });
+  };
+  if (img.src && img.src.endsWith(url) && img.complete && img.naturalWidth > 0) {
+    finalize();
+  } else {
+    img.onload = finalize;
+    img.onerror = () => { flash('図の読み込みに失敗しました', true); img.style.visibility = ''; };
+    img.src = url;
+    if (img.complete && img.naturalWidth > 0) finalize();
+  }
+}
+function closeFigOverlay() {
+  els.figOverlay.style.display = 'none';
+  // position を戻して次回のレイアウト計算に影響しないように
+  els.figOverlay.style.position = '';
+  els.figOverlay.style.top = '';
+  els.figOverlay.style.left = '';
+  els.figOverlay.style.width = '';
+  els.figOverlay.style.height = '';
+}
+function resetFigOvView(instant) {
+  const vp = els.figOvViewport.getBoundingClientRect();
+  const img = els.figOvImg;
+  const natW = img.naturalWidth || 1;
+  const natH = img.naturalHeight || 1;
+  if (vp.width < 50 || vp.height < 50) {
+    requestAnimationFrame(() => resetFigOvView(instant));
+    return;
+  }
+  // 端に触れないよう極小パディング (0 で完全フィット)
+  const pad = 2;
+  const availW = vp.width - pad * 2;
+  const availH = vp.height - pad * 2;
+  const s = Math.min(availW / natW, availH / natH);
+  console.log('[figOv reset]',
+    'vp:', vp.width.toFixed(0)+'x'+vp.height.toFixed(0),
+    'nat:', natW+'x'+natH,
+    'scale:', s.toFixed(3),
+    'displayed:', (natW*s).toFixed(0)+'x'+(natH*s).toFixed(0));
+  _figOvState.scale = s;
+  _figOvState.tx = (vp.width - natW * s) / 2;
+  _figOvState.ty = (vp.height - natH * s) / 2;
+  if (instant) {
+    const prev = img.style.transition;
+    img.style.transition = 'none';
+    applyFigOvTransform();
+    void img.offsetHeight;
+    img.style.transition = prev;
+  } else {
+    applyFigOvTransform();
+  }
+}
+function applyFigOvTransform() {
+  const { scale, tx, ty } = _figOvState;
+  els.figOvImg.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+}
+function zoomFigOv(factor, cx = null, cy = null) {
+  const vp = els.figOvViewport.getBoundingClientRect();
+  if (cx == null) cx = vp.width / 2;
+  if (cy == null) cy = vp.height / 2;
+  const oldScale = _figOvState.scale;
+  const newScale = Math.max(0.05, Math.min(20, oldScale * factor));
+  // マウス位置を中心にズーム
+  _figOvState.tx = cx - (cx - _figOvState.tx) * (newScale / oldScale);
+  _figOvState.ty = cy - (cy - _figOvState.ty) * (newScale / oldScale);
+  _figOvState.scale = newScale;
+  applyFigOvTransform();
+}
+els.figOvClose.addEventListener('click', closeFigOverlay);
+els.figOvZoomIn.addEventListener('click', () => zoomFigOv(1.5));
+els.figOvZoomOut.addEventListener('click', () => zoomFigOv(1/1.5));
+els.figOvReset.addEventListener('click', resetFigOvView);
+// クリックで 2倍拡大 (クリック地点中心)
+els.figOvViewport.addEventListener('click', (e) => {
+  if (_figOvState._justDragged) { _figOvState._justDragged = false; return; }
+  const vp = els.figOvViewport.getBoundingClientRect();
+  zoomFigOv(2, e.clientX - vp.left, e.clientY - vp.top);
+});
+// ホイールでズーム
+els.figOvViewport.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const vp = els.figOvViewport.getBoundingClientRect();
+  const f = e.deltaY < 0 ? 1.15 : 1/1.15;
+  zoomFigOv(f, e.clientX - vp.left, e.clientY - vp.top);
+}, {passive: false});
+// ドラッグで画像を動かす
+els.figOvViewport.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  _figOvState.dragging = true;
+  _figOvState.dragStartX = e.clientX - _figOvState.tx;
+  _figOvState.dragStartY = e.clientY - _figOvState.ty;
+  _figOvState._movedDist = 0;
+  els.figOvViewport.classList.add('grabbing');
+  els.figOvImg.classList.add('dragging');
+  e.preventDefault();
+});
+window.addEventListener('mousemove', (e) => {
+  if (!_figOvState.dragging) return;
+  const nx = e.clientX - _figOvState.dragStartX;
+  const ny = e.clientY - _figOvState.dragStartY;
+  _figOvState._movedDist += Math.abs(nx - _figOvState.tx) + Math.abs(ny - _figOvState.ty);
+  _figOvState.tx = nx;
+  _figOvState.ty = ny;
+  applyFigOvTransform();
+});
+window.addEventListener('mouseup', () => {
+  if (!_figOvState.dragging) return;
+  _figOvState.dragging = false;
+  els.figOvViewport.classList.remove('grabbing');
+  els.figOvImg.classList.remove('dragging');
+  // ドラッグとクリックの区別 (3px以上動いたらドラッグ)
+  if (_figOvState._movedDist > 3) _figOvState._justDragged = true;
+});
+// ページ変更や Esc で閉じる
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && els.figOverlay.style.display !== 'none') closeFigOverlay();
+});
+
+// -------- PDF ズーム --------
+let _pdfZoom = 1.0;
+try { _pdfZoom = parseFloat(localStorage.getItem('pdfZoom') || '1') || 1.0; } catch {}
+const PDF_ZOOM_MIN = 0.3, PDF_ZOOM_MAX = 8.0, PDF_ZOOM_STEP = 1.2;
+
+// ベース幅を初回計算時に保存し、100% = 「ペイン内にちょうど収まる幅」を維持
+let _pdfBaseWidth = 0;
+function applyPdfZoom() {
+  const container = els.pdfContainer;
+  if (!container) return;
+  // ベース幅は pdfBody の可視領域幅 - padding。zoom > 1 のときは pdfBody より広くなり
+  // 横スクロールバーが自動的に出る
+  const bodyRect = els.pdfBody.getBoundingClientRect();
+  const clientW = els.pdfBody.clientWidth || bodyRect.width;
+  const baseAvail = Math.max(200, clientW - 16);
+  // 100% ズームでは常に現在のペイン幅を基準にする (ペイン幅変更に追従)
+  _pdfBaseWidth = baseAvail;
+  const w = _pdfBaseWidth * _pdfZoom;
+  container.style.width = w + 'px';
+  container.style.maxWidth = 'none';
+  container.style.minWidth = w + 'px';  // pdf-outer の flex 縮小を抑制
+  els.pdfZoomLabel.textContent = Math.round(_pdfZoom * 100) + '%';
+  try { localStorage.setItem('pdfZoom', _pdfZoom.toFixed(3)); } catch {}
+}
+
+function setPdfZoom(newZoom, cx, cy) {
+  const oldZoom = _pdfZoom;
+  newZoom = Math.max(PDF_ZOOM_MIN, Math.min(PDF_ZOOM_MAX, newZoom));
+  if (Math.abs(newZoom - oldZoom) < 0.001) return;
+  // マウス位置周辺を中心にズームするためスクロール位置を調整
+  const bodyRect = els.pdfBody.getBoundingClientRect();
+  const scrollLeft = els.pdfBody.scrollLeft;
+  const scrollTop = els.pdfBody.scrollTop;
+  // マウス座標が pdfBody 内座標系でどこか
+  const mx = (cx != null) ? (cx - bodyRect.left + scrollLeft) : (scrollLeft + bodyRect.width / 2);
+  const my = (cy != null) ? (cy - bodyRect.top + scrollTop) : (scrollTop + bodyRect.height / 2);
+  _pdfZoom = newZoom;
+  applyPdfZoom();
+  const ratio = newZoom / oldZoom;
+  // ズーム後のスクロール位置: マウス位置が同じ相対位置に来るように
+  requestAnimationFrame(() => {
+    els.pdfBody.scrollLeft = mx * ratio - (cx != null ? cx - bodyRect.left : bodyRect.width / 2);
+    els.pdfBody.scrollTop = my * ratio - (cy != null ? cy - bodyRect.top : bodyRect.height / 2);
+  });
+}
+
+els.pdfZoomIn.addEventListener('click', () => setPdfZoom(_pdfZoom * PDF_ZOOM_STEP));
+els.pdfZoomOut.addEventListener('click', () => setPdfZoom(_pdfZoom / PDF_ZOOM_STEP));
+els.pdfZoomReset.addEventListener('click', () => setPdfZoom(1.0));
+
+// Ctrl+ホイールでズーム
+els.pdfBody.addEventListener('wheel', (e) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.12 : 1/1.12;
+  setPdfZoom(_pdfZoom * factor, e.clientX, e.clientY);
+}, {passive: false});
+
+// 初期化と window resize 時にベース幅再計算 + figure overlay もフォロー
+window.addEventListener('resize', () => {
+  applyPdfZoom();
+  if (els.figOverlay.style.display !== 'none') {
+    updateFigOverlayRect();
+    resetFigOvView(true);
+  }
+});
+
+// -------- 拡大時のドラッグパン --------
+// zoom > 1 のとき pdfBody をドラッグでスクロール
+// 通常の範囲選択 (svg 上のドラッグ) と競合しないため:
+//   - 中クリック (button === 1) は常にパン
+//   - 左クリック (button === 0) は zoom > 1 かつ shift 併用でパン
+//   - space キー押下中は左クリックもパン (cursor 変更でヒント表示)
+let _spaceHeld = false;
+let _panState = { active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 };
+function panBegin(clientX, clientY) {
+  _panState.active = true;
+  _panState.startX = clientX;
+  _panState.startY = clientY;
+  _panState.scrollLeft = els.pdfBody.scrollLeft;
+  _panState.scrollTop = els.pdfBody.scrollTop;
+  els.pdfBody.style.cursor = 'grabbing';
+  els.pdfBody.style.userSelect = 'none';
+}
+function panMove(clientX, clientY) {
+  if (!_panState.active) return;
+  els.pdfBody.scrollLeft = _panState.scrollLeft - (clientX - _panState.startX);
+  els.pdfBody.scrollTop  = _panState.scrollTop  - (clientY - _panState.startY);
+}
+function panEnd() {
+  if (!_panState.active) return;
+  _panState.active = false;
+  els.pdfBody.style.cursor = '';
+  els.pdfBody.style.userSelect = '';
+}
+
+els.pdfBody.addEventListener('mousedown', (e) => {
+  const isMiddle = e.button === 1;
+  const isPanLeft = e.button === 0 && (_spaceHeld || e.shiftKey) && _pdfZoom > 1;
+  if (isMiddle || isPanLeft) {
+    e.preventDefault();
+    panBegin(e.clientX, e.clientY);
+  }
+});
+window.addEventListener('mousemove', (e) => {
+  if (_panState.active) panMove(e.clientX, e.clientY);
+});
+window.addEventListener('mouseup', () => panEnd());
+window.addEventListener('mouseleave', () => panEnd());
+
+// Space キーでパンモード
+window.addEventListener('keydown', (e) => {
+  if (e.key === ' ' && !_spaceHeld && document.activeElement.tagName !== 'TEXTAREA'
+      && document.activeElement.tagName !== 'INPUT') {
+    _spaceHeld = true;
+    if (_pdfZoom > 1) els.pdfBody.style.cursor = 'grab';
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.key === ' ') {
+    _spaceHeld = false;
+    if (!_panState.active) els.pdfBody.style.cursor = '';
+  }
+});
+
+// zoom > 1 時にヒントを表示
+function updateZoomHint() {
+  if (_pdfZoom > 1) {
+    els.pdfHint.textContent = '中クリック or Shift/Space+ドラッグで移動';
+  } else {
+    els.pdfHint.textContent = 'Ctrl+ホイールで拡大縮小';
+  }
+}
+const _origApplyPdfZoom = applyPdfZoom;
+applyPdfZoom = function() { _origApplyPdfZoom(); updateZoomHint(); };
+
+els.figModalClose.addEventListener('click', () => els.figModal.classList.remove('show'));
+els.figModal.addEventListener('click', (e) => { if (e.target === els.figModal) els.figModal.classList.remove('show'); });
+
+function switchFigView(mode) {
+  els.figSingleView.style.display = mode === 'single' ? 'flex' : 'none';
+  els.figGalleryView.style.display = mode === 'gallery' ? 'block' : 'none';
+}
+
+function showFiguresGallery(kind, wantedNum) {
+  const all = [];
+  for (const p of pagesData) {
+    for (const f of (p.figures || [])) {
+      all.push({page: p.page_no, url: f.url, description: f.description, figure_number: f.figure_number});
+    }
+  }
+  if (!all.length) { flash('図が抽出されていません', true); return; }
+  els.figModalTitle.textContent = `${kind || 'Fig.'} ${wantedNum} が見つかりません - 全図から選択`;
+  const g = els.figGalleryView;
+  g.innerHTML = '';
+  g.style.display = 'grid';
+  g.style.gridTemplateColumns = 'repeat(auto-fill, minmax(200px, 1fr))';
+  g.style.gap = '10px';
+  for (const f of all) {
+    const card = document.createElement('div');
+    card.style.cssText = 'cursor:pointer;background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:6px;';
+    const head = document.createElement('div');
+    head.style.cssText = 'font-size:11px;color:var(--muted);margin-bottom:4px';
+    head.textContent = `Page ${f.page}${f.figure_number ? ' · ' + f.figure_number : ''}`;
+    card.appendChild(head);
+    const img = document.createElement('img');
+    img.src = f.url;
+    img.style.cssText = 'width:100%;height:120px;object-fit:contain;background:#fff;border-radius:3px;';
+    card.appendChild(img);
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:11px;color:var(--muted);margin-top:4px;max-height:3.5em;overflow:hidden;';
+    desc.textContent = String(f.description || '').slice(0, 120);
+    card.appendChild(desc);
+    card.addEventListener('click', () => {
+      els.figModalTitle.textContent = `Page ${f.page}${f.figure_number ? ' · ' + f.figure_number : ''}`;
+      els.figModalImg.src = f.url;
+      if (f.caption) { els.figModalCaption.textContent = f.caption; els.figModalCaption.style.display=''; }
+      else els.figModalCaption.style.display='none';
+      els.figModalNav.textContent = 'ギャラリーから選択';
+      switchFigView('single');
+    });
+    g.appendChild(card);
+  }
+  els.figModalNav.textContent = `${all.length}枚の図から選んでください`;
+  switchFigView('gallery');
+  els.figModal.classList.add('show');
+}
+
+// -------- コメント機能 --------
+els.commentCancel.addEventListener('click', () => els.commentModal.classList.remove('show'));
+els.commentModal.addEventListener('click', (e) => { if (e.target === els.commentModal) els.commentModal.classList.remove('show'); });
+
+async function openCommentModal(targetI) {
+  const p = pagesData[currentPageNo - 1];
+  if (!p) return;
+  const block = (p.blocks || []).find(b => b.i === targetI);
+  if (!block) return;
+  els.commentTargetInfo.textContent = `Page ${currentPageNo} / 文 #${targetI+1}: ${String(block.src||'').replace(/<[^>]+>/g,'').slice(0,80)}${block.src.length>80?'…':''}`;
+  els.commentTextarea.value = block.comment || '';
+  els.commentDelete.style.display = block.comment ? '' : 'none';
+  els.commentModal.classList.add('show');
+  els.commentTextarea.focus();
+
+  els.commentSave.onclick = async () => {
+    const text = els.commentTextarea.value.trim();
+    try {
+      const r = await fetch(`/api/job/${currentJobId}/comment`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({page: currentPageNo, i: targetI, text}),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        block.comment = text || null;
+        els.commentModal.classList.remove('show');
+        flash(text ? 'コメント保存' : 'コメント削除');
+        renderJaPanel(p);
+      } else flash('保存失敗: ' + (j.error || '?'), true);
+    } catch (err) { flash('エラー: ' + err, true); }
+  };
+  els.commentDelete.onclick = async () => {
+    try {
+      const r = await fetch(`/api/job/${currentJobId}/comment`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({page: currentPageNo, i: targetI, text: ''}),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        block.comment = null;
+        els.commentModal.classList.remove('show');
+        flash('コメント削除');
+        renderJaPanel(p);
+      }
+    } catch (err) { flash('エラー: ' + err, true); }
+  };
+}
+
+els.showComments.addEventListener('click', () => {
+  renderCommentsList();
+  els.commentsList.classList.add('show');
+});
+els.closeCommentsList.addEventListener('click', () => els.commentsList.classList.remove('show'));
+
+// -------- サプリメンタル PDF 追加 --------
+els.suppBtn.addEventListener('click', () => {
+  if (!currentJobId) { flash('先に本編 PDF を解析してください', true); return; }
+  els.suppFile.click();
+});
+els.suppFile.addEventListener('change', async () => {
+  const f = els.suppFile.files[0];
+  if (!f) return;
+  els.suppFile.value = '';  // 同名再選択のために初期化
+  if (!currentJobId) { flash('先に本編 PDF を解析してください', true); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('model', els.model.value);
+  flash(`サプリ ${f.name} をアップロード中...`);
+  try {
+    const r = await fetch(`/api/job/${currentJobId}/upload_supplement`, { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      flash(`サプリ追加失敗: ${j.detail || j.error || r.statusText}`, true);
+      return;
+    }
+    flash(`サプリ ${f.name} の解析を開始しました`);
+    // 本編が完了済みだと配信は閉じられているので、ここで繋ぎ直す
+    suppProgress = {done: 0, total: 0};
+    els.progressWrap.style.display = '';
+    els.progressBar.style.width = '0%';
+    els.progressText.textContent = 'サプリ解析を開始しています...';
+    setRunning(true);
+    subscribe(currentJobId);
+  } catch (err) {
+    flash('サプリ追加エラー: ' + err, true);
+  }
+});
+
+function renderCommentsList() {
+  const body = els.commentsBody;
+  body.innerHTML = '';
+  const items = [];
+  for (const p of pagesData) {
+    for (const b of (p.blocks || [])) {
+      if (b.comment) items.push({page: p.page_no, block: b});
+    }
+  }
+  if (!items.length) { body.textContent = 'まだコメントはありません。文を右クリックして「コメントを追加」から作成できます。'; return; }
+  for (const item of items) {
+    const div = document.createElement('div');
+    div.className = 'comment-item';
+    const srcPlain = String(item.block.src||'').replace(/<[^>]+>/g,'').slice(0,120);
+    div.innerHTML = `
+      <span class="del" title="削除">✕</span>
+      <div class="meta">Page ${item.page} · 文 #${item.block.i+1}</div>
+      <div class="comment"></div>
+      <div class="src">"${srcPlain}${item.block.src.length>120?'…':''}"</div>`;
+    div.querySelector('.comment').textContent = item.block.comment;
+    div.addEventListener('click', (ev) => {
+      if (ev.target.classList.contains('del')) return;
+      // ジャンプ
+      els.commentsList.classList.remove('show');
+      currentPageNo = item.page;
+      renderCurrentPage();
+      setTimeout(() => selectBlocks([item.block.i]), 100);
+    });
+    div.querySelector('.del').addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('このコメントを削除しますか?')) return;
+      try {
+        await fetch(`/api/job/${currentJobId}/comment`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({page: item.page, i: item.block.i, text: ''}),
+        });
+        item.block.comment = null;
+        renderCommentsList();
+        const p = pagesData[currentPageNo-1];
+        if (p) renderJaPanel(p);
+        flash('コメント削除');
+      } catch (err) { flash('エラー: ' + err, true); }
+    });
+    body.appendChild(div);
+  }
+}
+
+// 既存の右クリックメニュー処理に comment アクションを追加
+els.ctxMenu.addEventListener('click', (e) => {
+  const action = e.target.getAttribute('data-action');
+  if (action === 'comment' && ctxTargetI != null) {
+    els.ctxMenu.classList.remove('show');
+    openCommentModal(ctxTargetI);
+  }
+});
+
+// ==================== モデル管理 ====================
+let llmDlTimer = null;
+
+els.llmBtn.addEventListener('click', () => { els.llmModal.classList.add('show'); refreshLlm(); });
+els.llmClose.addEventListener('click', () => { els.llmModal.classList.remove('show'); stopDlPoll(); });
+els.llmModal.addEventListener('click', e => {
+  if (e.target === els.llmModal) { els.llmModal.classList.remove('show'); stopDlPoll(); }
+});
+els.llmRefresh.addEventListener('click', () => refreshLlm());
+
+const fmtGB = n => (n == null ? '?' : Number(n).toFixed(1) + 'GB');
+
+async function refreshLlm() {
+  try {
+    const [st, local, cat] = await Promise.all([
+      fetch('/api/llm/status').then(r => r.json()),
+      fetch('/api/llm/local').then(r => r.json()),
+      fetch('/api/llm/catalog').then(r => r.json()),
+    ]);
+    renderLlmStatus(st);
+    renderLlmLocal(local.models || [], st);
+    renderLlmCatalog(cat.catalog || []);
+    renderDlState(cat.download);
+    if (cat.download && cat.download.status === 'downloading') startDlPoll();
+  } catch (e) {
+    els.llmStatusBox.innerHTML = `<span class="err">状態の取得に失敗: ${e}</span>`;
+  }
+}
+
+function renderLlmStatus(st) {
+  const badge = st.connected
+    ? `<span class="llm-badge ok">接続中</span>`
+    : `<span class="llm-badge warn">未接続</span>`;
+  const who = st.managed ? 'このアプリが起動' : '外部で起動中（systemd など）';
+  const rows = [
+    `${badge} <b>${st.models.join(', ') || '(モデルなし)'}</b>`,
+    `接続先 <code>${st.url}</code> ・ ${st.connected ? who : '起動している LLM が見つかりません'}`,
+    `llama-server: <code>${st.llama_server || '見つかりません'}</code>`,
+    `モデル置き場: <code>${st.models_dir}</code>`,
+  ];
+  if (st.error && !st.connected) rows.push(`<span class="err">${st.error}</span>`);
+  els.llmStatusBox.innerHTML = rows.join('<br>');
+  if (st.managed) {
+    const stop = document.createElement('button');
+    stop.className = 'ghost';
+    stop.textContent = '停止';
+    stop.style.marginTop = '8px';
+    stop.addEventListener('click', async () => {
+      stop.disabled = true; stop.textContent = '停止中...';
+      try {
+        await fetch('/api/llm/stop', {method: 'POST'});
+        flash('モデルを停止しました');
+        await loadModels();
+      } catch (e) { flash('停止失敗: ' + e, true); }
+      refreshLlm();
+    });
+    els.llmStatusBox.appendChild(document.createElement('br'));
+    els.llmStatusBox.appendChild(stop);
+  }
+  els.llmHint.textContent = st.managed
+    ? 'このアプリが起動した LLM を使用中です。'
+    : '「起動」を押すとアプリが llama-server を立ち上げて接続先を切り替えます。';
+}
+
+function renderLlmLocal(models, st) {
+  if (!models.length) {
+    els.llmLocalList.innerHTML =
+      '<div class="llm-item"><span class="nm">GGUF が見つかりません。下のリストから追加してください。</span></div>';
+    return;
+  }
+  els.llmLocalList.innerHTML = '';
+  const curPath = st.process ? st.process.model_path : null;
+  for (const m of models) {
+    const div = document.createElement('div');
+    div.className = 'llm-item' + (m.path === curPath ? ' active' : '');
+    const vis = m.vision
+      ? '<span class="llm-badge ok">視覚対応</span>'
+      : '<span class="llm-badge warn">視覚なし・このアプリでは使えません</span>';
+    div.innerHTML =
+      `<span class="nm"><b>${m.name}</b> ${vis}` +
+      `<div class="meta">${fmtGB(m.size_gb)} · ${m.dir}</div></span>`;
+    const btn = document.createElement('button');
+    btn.textContent = m.path === curPath ? '使用中' : '起動';
+    btn.disabled = !m.vision || m.path === curPath;
+    btn.addEventListener('click', () => startLlm(m.path, m.mmproj, btn));
+    div.appendChild(btn);
+    els.llmLocalList.appendChild(div);
+  }
+}
+
+function renderLlmCatalog(cat) {
+  els.llmCatalogList.innerHTML = '';
+  for (const e of cat) {
+    const div = document.createElement('div');
+    div.className = 'llm-item';
+    div.innerHTML =
+      `<span class="nm"><b>${e.name}</b>` +
+      (e.installed ? ' <span class="llm-badge ok">導入済み</span>' : '') +
+      `<div class="meta">${fmtGB(e.size_gb)} · 目安メモリ ${e.min_ram_gb}GB 以上 · ${e.note}</div></span>`;
+    const btn = document.createElement('button');
+    if (e.installed) {
+      btn.textContent = '起動';
+      btn.addEventListener('click', () => startLlm(e.path, e.mmproj, btn));
+    } else {
+      btn.textContent = 'ダウンロード';
+      btn.addEventListener('click', () => installLlm(e.id, btn));
+    }
+    div.appendChild(btn);
+    els.llmCatalogList.appendChild(div);
+  }
+}
+
+async function startLlm(path, mmproj, btn) {
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '起動中...';
+  els.llmHint.textContent = 'モデルを読み込んでいます（大きいモデルでは数分かかります）';
+  try {
+    const r = await fetch('/api/llm/start', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path, mmproj}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    flash(`モデルを起動しました: ${j.model}`);
+    await loadModels();
+    await refreshLlm();
+  } catch (e) {
+    flash('起動失敗: ' + e, true);
+    btn.disabled = false; btn.textContent = old;
+    els.llmHint.textContent = '';
+  }
+}
+
+async function installLlm(id, btn) {
+  btn.disabled = true; btn.textContent = '開始中...';
+  try {
+    const r = await fetch('/api/llm/install', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    startDlPoll();
+  } catch (e) {
+    flash('ダウンロード開始失敗: ' + e, true);
+    btn.disabled = false; btn.textContent = 'ダウンロード';
+  }
+}
+
+function startDlPoll() {
+  stopDlPoll();
+  llmDlTimer = setInterval(async () => {
+    try {
+      const j = await fetch('/api/llm/install/status').then(r => r.json());
+      renderDlState(j.state);
+      if (!j.busy) {
+        stopDlPoll();
+        if (j.state && j.state.status === 'done') flash('ダウンロード完了');
+        refreshLlm();
+      }
+    } catch (e) { stopDlPoll(); }
+  }, 1000);
+}
+function stopDlPoll() { if (llmDlTimer) { clearInterval(llmDlTimer); llmDlTimer = null; } }
+
+function renderDlState(s) {
+  if (!s || s.status === 'idle') { els.llmDlBox.style.display = 'none'; return; }
+  els.llmDlBox.style.display = '';
+  if (s.status === 'error') {
+    els.llmDlBox.innerHTML = `<div class="llm-item"><span class="nm err">ダウンロード失敗: ${s.error}</span></div>`;
+    return;
+  }
+  if (s.status === 'done') {
+    els.llmDlBox.innerHTML = `<div class="llm-item"><span class="nm">${s.name} のダウンロードが完了しました</span></div>`;
+    return;
+  }
+  const pct = s.total_bytes ? (s.done_bytes / s.total_bytes * 100) : 0;
+  const gb = n => (n / 1e9).toFixed(2);
+  const el = (Date.now() / 1000 - (s.started_at || 0));
+  const speed = el > 0 ? (s.done_bytes / el / 1e6) : 0;
+  els.llmDlBox.innerHTML =
+    `<div class="llm-item"><span class="nm"><b>${s.name}</b> をダウンロード中` +
+    `<div class="meta">${s.file} · ${gb(s.done_bytes)} / ${gb(s.total_bytes)} GB` +
+    ` · ${speed.toFixed(1)} MB/s</div>` +
+    `<div class="llm-bar" style="margin-top:6px"><div style="width:${pct.toFixed(1)}%"></div></div>` +
+    `</span></div>`;
+}
+</script>
+</body>
+</html>
