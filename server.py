@@ -94,10 +94,16 @@ def _load_saved_jobs() -> None:
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
             job_id = state.get("id") or job_dir.name
-            # 進行中扱いだった状態は "cancelled" に降格 (サーバ再起動時)
+            # 進行中扱いだった状態は "cancelled" に降格 (サーバ再起動時)。
+            # 再起動をまたいで処理が続くことはないので、残っていたら必ず落とす。
             if state.get("status") in ("queued", "running", "cancelling"):
                 state["status"] = "cancelled"
                 state["error"] = state.get("error") or "サーバ再起動により中断"
+            if state.get("supplement_status") in ("queued", "processing", "cancelling"):
+                state["supplement_status"] = "cancelled"
+            for p in state.get("pages", []):
+                if p.get("status") == "processing":
+                    p["status"] = "pending"
             state["event_queue"] = asyncio.Queue(maxsize=2048)
             JOBS[job_id] = state
             print(f"[load] {job_id} {state.get('filename','?')} status={state.get('status')} pages={state.get('total_pages','?')}",
@@ -3178,13 +3184,25 @@ async def process_supplement(job_id: str, supp_path: Path, model: str):
         _save_job_state(job_id)
     except asyncio.CancelledError:
         job["supplement_status"] = "cancelled"
+        _finish_supplement(job, prev_status)
         _push(job_id, {"type": "cancelled", "message": "サプリ処理を中止しました"})
         _save_job_state(job_id)
     except Exception as e:
         job["supplement_status"] = "error"
         job["supplement_error"] = str(e)
+        _finish_supplement(job, prev_status)
         _push(job_id, {"type": "error", "message": f"サプリ処理エラー: {e}"})
         _save_job_state(job_id)
+
+
+def _finish_supplement(job: dict, prev_status: str | None) -> None:
+    """サプリ処理が途中で終わったときの後始末。
+    本編の状態を元に戻し、処理中のまま残ったページを未処理に戻す。
+    これをしないと画面が「実行中」のまま固まる。"""
+    job["status"] = prev_status or "done"
+    for p in job.get("pages", []):
+        if p.get("status") == "processing":
+            p["status"] = "pending"
 
 
 @app.post("/api/job/{job_id}/cancel")
@@ -3192,12 +3210,36 @@ async def cancel_job(job_id: str):
     if job_id not in JOBS:
         raise HTTPException(404, "job not found")
     job = JOBS[job_id]
-    t = job.get("task")
-    if not t or t.done():
-        return {"ok": True, "status": job.get("status"), "note": "not running"}
-    t.cancel()
-    job["status"] = "cancelling"
-    return {"ok": True, "status": "cancelling"}
+    # 本編とサプリは別のタスクなので両方止める
+    cancelled = []
+    for key, label in (("task", "本編"), ("supplement_task", "サプリ")):
+        t = job.get(key)
+        if t and not t.done():
+            t.cancel()
+            cancelled.append(label)
+    if cancelled:
+        if "本編" in cancelled:
+            job["status"] = "cancelling"
+        if "サプリ" in cancelled:
+            job["supplement_status"] = "cancelling"
+        return {"ok": True, "status": "cancelling", "cancelled": cancelled}
+    # タスクが残っていないのに実行中の表示が残っている場合 (再起動をまたいだ等) は
+    # 表示だけを整えて返す。これをしないと UI が「実行中」から戻らない。
+    changed = False
+    if job.get("status") in ("queued", "running", "cancelling"):
+        job["status"] = "cancelled"
+        changed = True
+    if job.get("supplement_status") in ("queued", "processing", "cancelling"):
+        job["supplement_status"] = "cancelled"
+        changed = True
+    for p in job.get("pages", []):
+        if p.get("status") == "processing":
+            p["status"] = "pending"
+            changed = True
+    if changed:
+        _save_job_state(job_id)
+        _push(job_id, {"type": "cancelled", "message": "停止しました（処理は既に終了していました）"})
+    return {"ok": True, "status": job.get("status"), "note": "not running"}
 
 
 def _looks_untranslated(ja: str, src: str) -> bool:
