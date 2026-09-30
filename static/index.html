@@ -1320,7 +1320,7 @@ function renderJaPanel(p) {
       }
       span.addEventListener('mouseenter', () => hoverBlock(b.i, true));
       span.addEventListener('mouseleave', () => hoverBlock(b.i, false));
-      span.addEventListener('click', () => selectBlocks([b.i]));
+      span.addEventListener('click', () => selectBlocks([b.i], {centerPdf: true}));
       para.appendChild(span);
       if (k < g.sents.length - 1) para.appendChild(document.createTextNode(' '));
     }
@@ -1353,7 +1353,7 @@ function hoverBlock(i, on) {
   if (card) card.classList.toggle('active', on);
 }
 
-function selectBlocks(indices) {
+function selectBlocks(indices, opts = {}) {
   els.pageOverlay.querySelectorAll('.block-rect.active').forEach(r => r.classList.remove('active'));
   els.jaFlow.querySelectorAll('.ja-sent.active').forEach(c => c.classList.remove('active'));
   for (const i of indices) {
@@ -1364,7 +1364,37 @@ function selectBlocks(indices) {
   if (indices.length) {
     const first = els.jaFlow.querySelector(`.ja-sent[data-i="${indices[0]}"]`);
     if (first) first.scrollIntoView({behavior:'smooth', block:'nearest'});
+    // 訳文側から選んだときは、対応する原文が見えるように PDF 側を動かす。
+    // PDF 側をクリックした場合は既に見えているので動かさない。
+    if (opts.centerPdf) centerPdfOnBlock(indices[0]);
   }
+}
+
+// 対応する原文の行が PDF ペインの上下中央に来るようスクロールする
+function centerPdfOnBlock(i) {
+  const rects = els.pageOverlay.querySelectorAll(`rect[data-i="${i}"]`);
+  if (!rects.length) return;
+  const body = els.pdfBody;
+  const view = body.getBoundingClientRect();
+  let top = Infinity, bottom = -Infinity, left = Infinity, right = -Infinity;
+  rects.forEach(r => {
+    const b = r.getBoundingClientRect();
+    if (!b.height && !b.width) return;
+    top = Math.min(top, b.top); bottom = Math.max(bottom, b.bottom);
+    left = Math.min(left, b.left); right = Math.max(right, b.right);
+  });
+  if (!isFinite(top)) return;
+  // 縦: 中央に合わせる
+  const dy = (top + bottom) / 2 - (view.top + view.height / 2);
+  // 横: 画面外にはみ出しているときだけ寄せる (普段は横位置を動かさない)
+  let dx = 0;
+  if (right > view.right) dx = right - view.right + 20;
+  else if (left < view.left) dx = left - view.left - 20;
+  body.scrollTo({
+    top: body.scrollTop + dy,
+    left: body.scrollLeft + dx,
+    behavior: 'smooth',
+  });
 }
 
 // -------- ドラッグ選択 --------
@@ -2012,7 +2042,7 @@ function highlightChatCitations(answer, msgBodyEl, webSources) {
         currentPageNo = pg;
         renderCurrentPage();
       }
-      setTimeout(() => selectBlocks([i]), 200);
+      setTimeout(() => selectBlocks([i], {centerPdf: true}), 200);
     });
   });
 
@@ -2804,7 +2834,7 @@ function renderCommentsList() {
       els.commentsList.classList.remove('show');
       currentPageNo = item.page;
       renderCurrentPage();
-      setTimeout(() => selectBlocks([item.block.i]), 100);
+      setTimeout(() => selectBlocks([item.block.i], {centerPdf: true}), 100);
     });
     div.querySelector('.del').addEventListener('click', async (ev) => {
       ev.stopPropagation();
