@@ -1,8 +1,36 @@
 # PDF VL Assistant
 
+英語の論文 PDF を、**ローカルの視覚対応 LLM** でページごとに読み解き、原文と日本語訳を左右に並べて読むツールです。外部サービスには一切送りません。
+
 Read English research papers with a **local vision-capable LLM**. Each page is analysed as an image, then shown side by side: the original PDF on the left, a Japanese translation on the right. Nothing leaves your machine.
 
-［[日本語](README.ja.md)］
+---
+
+## 概要（日本語）
+
+📖 **詳しい説明は [README.ja.md](README.ja.md) をご覧ください。**
+
+ページを画像ごと LLM に見せて解析するので、文字を拾うだけでは分からない段組み・脚注・行番号に強いのが特徴です。
+
+- **文単位の対訳** — 訳文をクリックすると、対応する原文が PDF 側の中央に表示される
+- **図・表をクリックで表示** — 本文中の「Fig. 3」「Table 2」を押すと、その図表と和訳済みキャプションが出る。写真だけでなくベクター図も切り出し、2 段組や複数ページに跨る表にも対応
+- **数式はそのまま画像で表示** — 文字として取り出すと項ごとにバラバラになるため、元ページから切り出して貼る
+- **サプリメンタル PDF の追加解析** — 本編と番号空間を分け、「Supplementary Fig. 2」から正しく引ける
+- **解析中でも読める** — 終わったページから順に表示。中断・再開・リロードに耐える
+- **文へのコメント**、**文書内チャット**
+
+### 使い方
+
+```bash
+./install.sh   # Python 環境と llama.cpp を用意
+./run.sh       # http://localhost:8090 を開く
+```
+
+初回は画面右上の「🧠 モデル管理」から、推奨リストの視覚対応モデルを 1 つ選んでダウンロードし、「起動」を押してください。このマシンに既に入っている GGUF も自動で探して一覧に出します。
+
+用意しているモデルは Qwen3.5（2B〜35B）、Qwen3.8 27B、Gemma 4 12B、そして **Qwen3.8 Flash-Next（MoE 125B）** です。容量と必要メモリの目安は[下の表](#recommended-models)にあります。
+
+---
 
 ## What it does
 
@@ -55,6 +83,8 @@ Open `http://localhost:8090` (also reachable from other machines on your LAN).
 - a list of recommended models you can add
 
 Pick one, press download, and press start when it finishes.
+
+<a id="recommended-models"></a>
 
 | Model | Size | RAM guide |
 |---|---|---|
