@@ -66,6 +66,8 @@ Treat the answers as a way to draft and to catch what you missed, not as the rev
 
 Japanese is the default, but you choose the target language when you start the analysis: Japanese, English, Simplified Chinese, Korean, German, French or Spanish. The choice is remembered in your browser, and stored per document — reopen a document and it comes back in the language it was translated into. Chat answers follow the same language.
 
+**The interface follows too** — buttons, menus and messages (about 140 strings) are translated into the language you pick. The translation panel and the PDF itself are the document, so they are left alone.
+
 ## Requirements
 
 - Python 3.10+

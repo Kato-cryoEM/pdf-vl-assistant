@@ -797,6 +797,7 @@
   </div>
 </div>
 
+<script src="/static/i18n.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -956,7 +957,7 @@ async function loadSavedJob(jobId, opts={}) {
     if (!r.ok) throw new Error(await r.text());
     const job = await r.json();
     if (jobId !== currentJobId) clearChat();  // 別の文書に切り替わったとき
-    if (job.lang) { els.lang.value = job.lang; setJaPaneTitle(job.lang); }
+    if (job.lang) { els.lang.value = job.lang; applyI18n(job.lang); setJaPaneTitle(job.lang); }
     currentJobId = jobId;
     els.status.textContent = `ジョブ ${jobId} (${job.status})`;
     els.progressWrap.style.display = '';
@@ -995,7 +996,7 @@ els.deleteJobBtn.addEventListener('click', async () => {
     const r = await fetch(`/api/job/${id}`, {method: 'DELETE'});
     if (!r.ok) throw new Error(await r.text());
     if (id === currentJobId) currentJobId = null;
-    flash('削除しました');
+    flash(t('削除しました'));
     await refreshSavedJobs();
   } catch (e) { flash('削除失敗: ' + e, true); }
 });
@@ -1046,18 +1047,21 @@ async function loadLanguages() {
       if (l.code === saved) o.selected = true;
       els.lang.appendChild(o);
     }
+    applyI18n(els.lang.value);
     setJaPaneTitle(els.lang.value);
   } catch (e) { console.warn('loadLanguages failed', e); }
 }
 els.lang.addEventListener('change', () => {
   try { localStorage.setItem('pdfvl.lang', els.lang.value); } catch (e) {}
+  applyI18n(els.lang.value);          // 画面の文字も選んだ言語に合わせる
+  setJaPaneTitle(els.lang.value);
 });
 // 訳文ペインの見出しを、その文書を訳した言語に合わせる
 function setJaPaneTitle(code) {
   if (!els.jaPaneTitle) return;
   const name = langNames[code];
-  els.jaPaneTitle.textContent =
-    !name ? '訳文' : (code === 'ja' ? '日本語訳' : `訳文（${name}）`);
+  // 画面の言語と訳文の言語は連動しているので、見出しは単に「訳文」で足りる
+  els.jaPaneTitle.textContent = name ? t('訳文') : t('訳文');
 }
 loadLanguages();
 tryResumeJob();
@@ -1119,15 +1123,15 @@ function setRunning(running) {
 
 els.cancel.addEventListener('click', async () => {
   if (!currentJobId) return;
-  if (!confirm('現在の解析を中止しますか？途中結果は残ります。')) return;
-  els.cancel.disabled = true; els.cancel.textContent = '中止中...';
+  if (!confirm(t('現在の解析を中止しますか？途中結果は残ります。'))) return;
+  els.cancel.disabled = true; els.cancel.textContent = t('中止中...');
   try { await fetch('/api/job/' + currentJobId + '/cancel', {method:'POST'}); }
   catch (e) { els.stageLine.innerHTML = '<span class="err">中止要求失敗: ' + e + '</span>'; }
 });
 
 els.submit.addEventListener('click', async () => {
   const f = els.file.files[0];
-  if (!f) { alert('PDFを選択してください'); return; }
+  if (!f) { alert(t('PDFを選択してください')); return; }
   // 状態リセット
   clearChat();
   setJaPaneTitle(els.lang.value);
@@ -1137,7 +1141,7 @@ els.submit.addEventListener('click', async () => {
   els.progressWrap.style.display = '';
   els.reader.classList.add('hidden');
   els.jaFlow.innerHTML = ''; els.figList.innerHTML = ''; els.figSection.style.display = 'none';
-  els.progressText.textContent = 'アップロード中...'; els.progressBar.style.width = '0%';
+  els.progressText.textContent = t('アップロード中...'); els.progressBar.style.width = '0%';
   els.stageLine.textContent = ''; els.statsLine.textContent = '';
   setRunning(true);
 
@@ -1211,8 +1215,8 @@ function updatePageStatus() {
   els.totalPageNo.textContent = totalPages;
   const statusMap = {
     done: `完了 (${p.elapsed || '?'}s)`,
-    processing: '翻訳中...',
-    pending: p.image_url ? '翻訳待ち' : 'ページ準備中',
+    processing: t('翻訳中...'),
+    pending: p.image_url ? t('翻訳待ち') : t('ページ準備中'),
   };
   els.pageStatus.textContent = statusMap[p.status] || p.status || '';
 }
@@ -1341,7 +1345,7 @@ function renderJaPanel(p) {
       span.className = 'ja-sent' + (b.ja ? '' : ' pending');
       if (b.comment) span.classList.add('has-comment');
       span.setAttribute('data-i', b.i);
-      const rendered = b.ja ? renderSubSup(b.ja) : '(翻訳待ち)';
+      const rendered = b.ja ? renderSubSup(b.ja) : t('(翻訳待ち)');
       // references 以外の本文には citation マーカーをクリック可能に
       let html = wrapFigReferences(rendered);
       if (g.label !== 'references') html = wrapCitations(html);
@@ -1504,7 +1508,7 @@ function attachDragSelect() {
 
 // -------- SSE購読 --------
 function subscribe(jobId) {
-  els.progressText.textContent = '解析中...';
+  els.progressText.textContent = t('解析中...');
   jobStartTime = Date.now();
   if (statsTimer) clearInterval(statsTimer);
   statsTimer = setInterval(() => {
@@ -1551,7 +1555,7 @@ function handleEvent(d) {
         for (const p of pagesData) if (p.status === 'done') recordCompleted(p);
         // 全体要約は撤去済み
         els.progressBar.style.width = totalPages ? (completedPageTimes.length/totalPages*100).toFixed(1) + '%' : '0%';
-        els.progressText.textContent = `完了 ${completedPageTimes.length}/${totalPages}`;
+        els.progressText.textContent = t('完了 {done}/{total}', {done: completedPageTimes.length, total: totalPages});
       }
       // 既に終わったジョブなら SSE を即クローズし、UI も待機状態へ
       // (本編が完了でもサプリ解析中なら繋いだままにする)
@@ -1572,7 +1576,7 @@ function handleEvent(d) {
         suppProgress = {done: 0, total: d.supp_total};
         els.progressWrap.style.display = '';
         els.progressBar.style.width = '0%';
-        els.progressText.textContent = `サプリ 完了 0/${d.supp_total}`;
+        els.progressText.textContent = t('サプリ 完了 {done}/{total}', {done: 0, total: d.supp_total});
         setRunning(true);
       }
       break;
@@ -1619,10 +1623,11 @@ function handleEvent(d) {
         // サプリはページ番号が本編の続きになるので、サプリ内での進捗として表示する
         suppProgress.total = d.supp_total;
         els.progressText.textContent =
-          `サプリ ${d.supp_page} / ${d.supp_total} を翻訳中 (完了 ${suppProgress.done}/${d.supp_total}) · 全体 P${d.page}`;
+          t('サプリ {page} / {total} を翻訳中 (完了 {done}/{total})',
+            {page: d.supp_page, total: d.supp_total, done: suppProgress.done}) + ` · P${d.page}`;
         els.progressBar.style.width = ((d.supp_page-1)/d.supp_total*100).toFixed(1) + '%';
       } else {
-      els.progressText.textContent = `ページ ${d.page} / ${d.total} を翻訳中 (完了 ${completedPageTimes.length}/${d.total})`;
+      els.progressText.textContent = t('ページ {page} / {total} を翻訳中 (完了 {done}/{total})', {page: d.page, total: d.total, done: completedPageTimes.length});
       els.progressBar.style.width = ((d.page-1)/d.total*100).toFixed(1) + '%';
       }
       if (pagesData[d.page-1]) pagesData[d.page-1].status = 'processing';
@@ -1702,10 +1707,10 @@ function handleEvent(d) {
         suppProgress.total = d.supp_total;
         suppProgress.done = d.supp_page;
         els.progressBar.style.width = (d.supp_page/d.supp_total*100).toFixed(1) + '%';
-        els.progressText.textContent = `サプリ 完了 ${d.supp_page}/${d.supp_total}`;
+        els.progressText.textContent = t('サプリ 完了 {done}/{total}', {done: d.supp_page, total: d.supp_total});
       } else {
         els.progressBar.style.width = (d.page/totalPages*100).toFixed(1) + '%';
-        els.progressText.textContent = `完了 ${completedPageTimes.length}/${totalPages}`;
+        els.progressText.textContent = t('完了 {done}/{total}', {done: completedPageTimes.length, total: totalPages});
       }
       pageStartTime = 0;
       if (currentPageNo === d.page) { renderJaPanel(p); updatePageStatus(); }
@@ -1813,14 +1818,14 @@ els.ctxMenu.addEventListener('click', async (e) => {
 
   if (action === 'copy-src') {
     const plain = String(block.src || '').replace(/<[^>]+>/g, '');
-    try { await navigator.clipboard.writeText(plain); flash('原文をコピーしました'); }
+    try { await navigator.clipboard.writeText(plain); flash(t('原文をコピーしました')); }
     catch (err) { alert('コピー失敗: ' + err); }
     return;
   }
 
   if (action === 'retranslate') {
     // オプション付きダイアログを開く
-    els.retransCurrentJa.textContent = String(block.ja || '(未翻訳)').replace(/<[^>]+>/g, '');
+    els.retransCurrentJa.textContent = String(block.ja || t('(未翻訳)')).replace(/<[^>]+>/g, '');
     els.retransAvoidPrev.checked = false;
     // 用語集は前回の入力を保持 (localStorage)
     try { els.retransGlossary.value = localStorage.getItem('retransGlossary') || ''; }
@@ -1832,14 +1837,14 @@ els.ctxMenu.addEventListener('click', async (e) => {
 
   if (action === 'merge-prev' || action === 'merge-next') {
     if (!confirm(`${action === 'merge-prev' ? '前' : '次'}の文と結合して再翻訳しますか?`)) return;
-    setSentStatus(ctxTargetI, '編集中...');
+    setSentStatus(ctxTargetI, t('編集中...'));
     try {
       const r = await fetch(`/api/job/${currentJobId}/edit`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({page: currentPageNo, i: ctxTargetI, action: action.replace('-', '_')}),
       });
       const j = await r.json();
-      if (j.ok) flash('編集+再翻訳 完了'); else flash('編集失敗: ' + (j.error || '?'), true);
+      if (j.ok) flash(t('編集+再翻訳 完了')); else flash('編集失敗: ' + (j.error || '?'), true);
       // structure_done イベントで自動再描画される
     } catch (err) { flash('編集エラー: ' + err, true); }
     return;
@@ -1859,9 +1864,9 @@ els.splitModal.addEventListener('click', (e) => {
 });
 els.splitConfirm.addEventListener('click', async () => {
   const edited = els.splitTextarea.value;
-  if (!edited.includes('|')) { alert('分割位置に | を入れてください'); return; }
+  if (!edited.includes('|')) { alert(t('分割位置に | を入れてください')); return; }
   els.splitModal.classList.remove('show');
-  setSentStatus(ctxTargetI, '分割+再翻訳中...');
+  setSentStatus(ctxTargetI, t('分割+再翻訳中...'));
   try {
     const r = await fetch(`/api/job/${currentJobId}/edit`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1890,7 +1895,7 @@ els.retransConfirm.addEventListener('click', async () => {
   const p = pagesData[currentPageNo - 1];
   const block = (p?.blocks || []).find(b => b.i === targetI);
   if (!block) return;
-  setSentStatus(targetI, '再翻訳中...');
+  setSentStatus(targetI, t('再翻訳中...'));
   try {
     const r = await fetch(`/api/job/${currentJobId}/retranslate`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1901,7 +1906,7 @@ els.retransConfirm.addEventListener('click', async () => {
       }),
     });
     const j = await r.json();
-    if (j.ok) { flash('再翻訳完了'); block.ja = j.ja; refreshSentence(targetI); }
+    if (j.ok) { flash(t('再翻訳完了')); block.ja = j.ja; refreshSentence(targetI); }
     else { flash('再翻訳失敗: ' + (j.error || '?'), true); refreshSentence(targetI); }
   } catch (err) { flash('再翻訳エラー: ' + err, true); refreshSentence(targetI); }
 });
@@ -1921,7 +1926,7 @@ function refreshSentence(i) {
   const span = els.jaFlow.querySelector(`.ja-sent[data-i="${i}"]`);
   if (span) {
     span.classList.remove('pending');
-    span.innerHTML = renderSubSup(block.ja || '(翻訳待ち)');
+    span.innerHTML = renderSubSup(block.ja || t('(翻訳待ち)'));
   }
 }
 
@@ -1940,7 +1945,7 @@ function flash(msg, isError) {
 // -------- チャット --------
 els.chatToggle.addEventListener('click', () => {
   els.chatBody.classList.toggle('collapsed');
-  els.chatToggle.textContent = els.chatBody.classList.contains('collapsed') ? '展開' : '折り畳み';
+  els.chatToggle.textContent = els.chatBody.classList.contains('collapsed') ? t('展開') : t('折り畳み');
 });
 
 els.chatInput.addEventListener('keydown', (e) => {
@@ -1950,10 +1955,10 @@ els.chatInput.addEventListener('keydown', (e) => {
 els.chatSend.addEventListener('click', async () => {
   const msg = els.chatInput.value.trim();
   if (!msg) return;
-  if (!currentJobId) { flash('先にPDFを解析してください', true); return; }
+  if (!currentJobId) { flash(t('先にPDFを解析してください'), true); return; }
   els.chatInput.value = '';
   addChatMsg('user', msg);
-  const asstEl = addChatMsg('assistant', '(応答中...)');
+  const asstEl = addChatMsg('assistant', t('(応答中...)'));
   const asstBody = asstEl.querySelector('.body');
   els.chatSend.disabled = true;
   try {
@@ -2001,7 +2006,7 @@ els.chatSend.addEventListener('click', async () => {
       asstBody.textContent = acc;
       els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
     }
-    if (!acc) asstBody.textContent = '(空応答)';
+    if (!acc) asstBody.textContent = t('(空応答)');
     // 引用マーカー [P<n>S<i>] を解析 → ソース文をハイライト
     highlightChatCitations(acc, asstBody, webSources);
   } catch (e) {
@@ -2108,7 +2113,7 @@ function clearChat() {
 function addChatMsg(who, text) {
   const div = document.createElement('div');
   div.className = 'chat-msg ' + who;
-  div.innerHTML = `<div class="who">${who === 'user' ? 'あなた' : 'アシスタント'}</div><div class="body"></div>`;
+  div.innerHTML = `<div class="who">${who === 'user' ? t('あなた') : t('アシスタント')}</div><div class="body"></div>`;
   div.querySelector('.body').textContent = text;
   els.chatMessages.appendChild(div);
   els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
@@ -2294,15 +2299,15 @@ function showFigure(figNum, kind) {
         url: null,
         caption: legend,
         note: targetKindIsTable
-          ? '※ この表はPDF内に画像として含まれていません(別ファイル提供など)。説明のみ表示します。'
-          : '※ この図はPDF内から画像として取り出せませんでした。説明のみ表示します。',
+          ? t('※ この表はPDF内に画像として含まれていません(別ファイル提供など)。説明のみ表示します。')
+          : t('※ この図はPDF内から画像として取り出せませんでした。説明のみ表示します。'),
       });
       return;
     }
   }
   if (!candidates.length) {
-    flash(targetKindIsTable ? '表が抽出されていません (0枚)'
-                            : '図が抽出されていません (0枚)', true);
+    flash(targetKindIsTable ? t('表が抽出されていません (0枚)')
+                            : t('図が抽出されていません (0枚)'), true);
     return;
   }
   if (candidates[0].score === 0) {
@@ -2424,7 +2429,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function openFigOverlay({title, url, caption, note}) {
   els.figOvTitle.textContent = title;
-  els.figOvCaption.textContent = (note ? note + '\n\n' : '') + (caption || '(キャプションなし)');
+  els.figOvCaption.textContent = (note ? note + '\n\n' : '') + (caption || t('(キャプションなし)'));
   // オーバーレイを表示・位置合わせ (fixed で pdfBody にフィット)
   els.figOverlay.style.display = '';
   updateFigOverlayRect();
@@ -2782,7 +2787,7 @@ async function openCommentModal(targetI) {
       if (j.ok) {
         block.comment = text || null;
         els.commentModal.classList.remove('show');
-        flash(text ? 'コメント保存' : 'コメント削除');
+        flash(text ? 'コメント保存' : t('コメント削除'));
         renderJaPanel(p);
       } else flash('保存失敗: ' + (j.error || '?'), true);
     } catch (err) { flash('エラー: ' + err, true); }
@@ -2797,7 +2802,7 @@ async function openCommentModal(targetI) {
       if (j.ok) {
         block.comment = null;
         els.commentModal.classList.remove('show');
-        flash('コメント削除');
+        flash(t('コメント削除'));
         renderJaPanel(p);
       }
     } catch (err) { flash('エラー: ' + err, true); }
@@ -2874,7 +2879,7 @@ function renderCommentsList() {
     });
     div.querySelector('.del').addEventListener('click', async (ev) => {
       ev.stopPropagation();
-      if (!confirm('このコメントを削除しますか?')) return;
+      if (!confirm(t('このコメントを削除しますか?'))) return;
       try {
         await fetch(`/api/job/${currentJobId}/comment`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2884,7 +2889,7 @@ function renderCommentsList() {
         renderCommentsList();
         const p = pagesData[currentPageNo-1];
         if (p) renderJaPanel(p);
-        flash('コメント削除');
+        flash(t('コメント削除'));
       } catch (err) { flash('エラー: ' + err, true); }
     });
     body.appendChild(div);
@@ -2978,25 +2983,25 @@ function renderLlmStatus(st) {
   const badge = st.connected
     ? `<span class="llm-badge ok">接続中</span>`
     : `<span class="llm-badge warn">未接続</span>`;
-  const who = st.managed ? 'このアプリが起動' : '外部で起動中（systemd など）';
+  const who = st.managed ? t('このアプリが起動') : t('外部で起動中（systemd など）');
   const rows = [
-    `${badge} <b>${st.models.join(', ') || '(モデルなし)'}</b>`,
-    `接続先 <code>${st.url}</code> ・ ${st.connected ? who : '起動している LLM が見つかりません'}`,
-    `llama-server: <code>${st.llama_server || '見つかりません'}</code>`,
-    `モデル置き場: <code>${st.models_dir}</code>`,
+    `${badge} <b>${st.models.join(', ') || t('(モデルなし)')}</b>`,
+    `${t('接続先')} <code>${st.url}</code> ・ ${st.connected ? who : t('起動している LLM が見つかりません')}`,
+    `llama-server: <code>${st.llama_server || t('見つかりません')}</code>`,
+    `${t('モデル置き場')}: <code>${st.models_dir}</code>`,
   ];
   if (st.error && !st.connected) rows.push(`<span class="err">${st.error}</span>`);
   els.llmStatusBox.innerHTML = rows.join('<br>');
   if (st.managed) {
     const stop = document.createElement('button');
     stop.className = 'ghost';
-    stop.textContent = '停止';
+    stop.textContent = t('停止');
     stop.style.marginTop = '8px';
     stop.addEventListener('click', async () => {
-      stop.disabled = true; stop.textContent = '停止中...';
+      stop.disabled = true; stop.textContent = t('停止中...');
       try {
         await fetch('/api/llm/stop', {method: 'POST'});
-        flash('モデルを停止しました');
+        flash(t('モデルを停止しました'));
         await loadModels();
       } catch (e) { flash('停止失敗: ' + e, true); }
       refreshLlm();
@@ -3005,8 +3010,8 @@ function renderLlmStatus(st) {
     els.llmStatusBox.appendChild(stop);
   }
   els.llmHint.textContent = st.managed
-    ? 'このアプリが起動した LLM を使用中です。'
-    : '「起動」を押すとアプリが llama-server を立ち上げて接続先を切り替えます。';
+    ? t('このアプリが起動した LLM を使用中です。')
+    : t('「起動」を押すとアプリが llama-server を立ち上げて接続先を切り替えます。');
 }
 
 function renderLlmLocal(models, st) {
@@ -3027,7 +3032,7 @@ function renderLlmLocal(models, st) {
       `<span class="nm"><b>${m.name}</b> ${vis}` +
       `<div class="meta">${fmtGB(m.size_gb)} · ${m.dir}</div></span>`;
     const btn = document.createElement('button');
-    btn.textContent = m.path === curPath ? '使用中' : '起動';
+    btn.textContent = m.path === curPath ? t('使用中') : t('起動');
     btn.disabled = !m.vision || m.path === curPath;
     btn.addEventListener('click', () => startLlm(m.path, m.mmproj, btn));
     div.appendChild(btn);
@@ -3043,13 +3048,13 @@ function renderLlmCatalog(cat) {
     div.innerHTML =
       `<span class="nm"><b>${e.name}</b>` +
       (e.installed ? ' <span class="llm-badge ok">導入済み</span>' : '') +
-      `<div class="meta">${fmtGB(e.size_gb)} · 目安メモリ ${e.min_ram_gb}GB 以上 · ${e.note}</div></span>`;
+      `<div class="meta">${fmtGB(e.size_gb)} · ${t('目安メモリ {n}GB 以上', {n: e.min_ram_gb})} · ${e.note}</div></span>`;
     const btn = document.createElement('button');
     if (e.installed) {
-      btn.textContent = '起動';
+      btn.textContent = t('起動');
       btn.addEventListener('click', () => startLlm(e.path, e.mmproj, btn));
     } else {
-      btn.textContent = 'ダウンロード';
+      btn.textContent = t('ダウンロード');
       btn.addEventListener('click', () => installLlm(e.id, btn));
     }
     div.appendChild(btn);
@@ -3059,8 +3064,8 @@ function renderLlmCatalog(cat) {
 
 async function startLlm(path, mmproj, btn) {
   const old = btn.textContent;
-  btn.disabled = true; btn.textContent = '起動中...';
-  els.llmHint.textContent = 'モデルを読み込んでいます（大きいモデルでは数分かかります）';
+  btn.disabled = true; btn.textContent = t('起動中...');
+  els.llmHint.textContent = t('モデルを読み込んでいます（大きいモデルでは数分かかります）');
   try {
     const r = await fetch('/api/llm/start', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -3079,7 +3084,7 @@ async function startLlm(path, mmproj, btn) {
 }
 
 async function installLlm(id, btn) {
-  btn.disabled = true; btn.textContent = '開始中...';
+  btn.disabled = true; btn.textContent = t('開始中...');
   try {
     const r = await fetch('/api/llm/install', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -3090,7 +3095,7 @@ async function installLlm(id, btn) {
     startDlPoll();
   } catch (e) {
     flash('ダウンロード開始失敗: ' + e, true);
-    btn.disabled = false; btn.textContent = 'ダウンロード';
+    btn.disabled = false; btn.textContent = t('ダウンロード');
   }
 }
 
@@ -3102,7 +3107,7 @@ function startDlPoll() {
       renderDlState(j.state);
       if (!j.busy) {
         stopDlPoll();
-        if (j.state && j.state.status === 'done') flash('ダウンロード完了');
+        if (j.state && j.state.status === 'done') flash(t('ダウンロード完了'));
         refreshLlm();
       }
     } catch (e) { stopDlPoll(); }
