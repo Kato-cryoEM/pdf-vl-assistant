@@ -62,6 +62,10 @@ So you can load a manuscript under review, read it side by side, leave comments 
 
 Treat the answers as a way to draft and to catch what you missed, not as the review itself: the judgement and the responsibility remain yours. Policies on using generative AI in peer review differ between publishers — check the terms of the invitation, even for a local model.
 
+## Translation language
+
+Japanese is the default, but you choose the target language when you start the analysis: Japanese, English, Simplified Chinese, Korean, German, French or Spanish. The choice is remembered in your browser, and stored per document — reopen a document and it comes back in the language it was translated into. Chat answers follow the same language.
+
 ## Requirements
 
 - Python 3.10+

@@ -582,6 +582,7 @@
     <div class="row">
       <input type="file" id="file" accept="application/pdf">
       <label>モデル <select id="model"></select></label>
+      <label>訳す言語 <select id="lang"></select></label>
       <label>最大ページ数 (0=全) <input type="number" id="maxpages" value="0" min="0" style="width:70px"></label>
       <button id="submit">解析開始</button>
       <button id="cancel" class="danger" style="display:none">中止</button>
@@ -646,7 +647,7 @@
       </div>
       <div class="pane">
         <div class="pane-head">
-          <span>日本語訳</span>
+          <span id="jaPaneTitle">日本語訳</span>
           <span class="font-ctl">
             <select id="fontFamily" title="書体">
               <option value="sans">ゴシック</option>
@@ -804,6 +805,7 @@ const els = {
   uploader: $('uploader'),
   file: $('file'),
   model: $('model'),
+  lang: $('lang'),
   maxpages: $('maxpages'),
   submit: $('submit'),
   cancel: $('cancel'),
@@ -831,6 +833,7 @@ const els = {
   pageImg: $('pageImg'),
   pageOverlay: $('pageOverlay'),
   jaFlow: $('jaFlow'),
+  jaPaneTitle: $('jaPaneTitle'),
   figSection: $('figSection'),
   figList: $('figList'),
   modal: $('modal'),
@@ -953,6 +956,7 @@ async function loadSavedJob(jobId, opts={}) {
     if (!r.ok) throw new Error(await r.text());
     const job = await r.json();
     if (jobId !== currentJobId) clearChat();  // 別の文書に切り替わったとき
+    if (job.lang) { els.lang.value = job.lang; setJaPaneTitle(job.lang); }
     currentJobId = jobId;
     els.status.textContent = `ジョブ ${jobId} (${job.status})`;
     els.progressWrap.style.display = '';
@@ -1026,6 +1030,36 @@ async function loadModels() {
   } catch (e) { els.status.textContent = 'モデル一覧取得失敗: ' + e; }
 }
 loadModels();
+
+// -------- 訳す言語 --------
+let langNames = {};
+async function loadLanguages() {
+  try {
+    const j = await (await fetch('/api/languages')).json();
+    langNames = Object.fromEntries(j.languages.map(l => [l.code, l.name]));
+    let saved = j.default;
+    try { saved = localStorage.getItem('pdfvl.lang') || j.default; } catch (e) {}
+    els.lang.innerHTML = '';
+    for (const l of j.languages) {
+      const o = document.createElement('option');
+      o.value = l.code; o.textContent = l.name;
+      if (l.code === saved) o.selected = true;
+      els.lang.appendChild(o);
+    }
+    setJaPaneTitle(els.lang.value);
+  } catch (e) { console.warn('loadLanguages failed', e); }
+}
+els.lang.addEventListener('change', () => {
+  try { localStorage.setItem('pdfvl.lang', els.lang.value); } catch (e) {}
+});
+// 訳文ペインの見出しを、その文書を訳した言語に合わせる
+function setJaPaneTitle(code) {
+  if (!els.jaPaneTitle) return;
+  const name = langNames[code];
+  els.jaPaneTitle.textContent =
+    !name ? '訳文' : (code === 'ja' ? '日本語訳' : `訳文（${name}）`);
+}
+loadLanguages();
 tryResumeJob();
 
 // -------- 時間フォーマット --------
@@ -1096,6 +1130,7 @@ els.submit.addEventListener('click', async () => {
   if (!f) { alert('PDFを選択してください'); return; }
   // 状態リセット
   clearChat();
+  setJaPaneTitle(els.lang.value);
   completedPageTimes.length = 0;
   totalPages = 0; currentPageNo = 1; pageStartTime = 0;
   pagesData = [];
@@ -1110,6 +1145,7 @@ els.submit.addEventListener('click', async () => {
   fd.append('file', f);
   fd.append('max_pages', els.maxpages.value || '0');
   fd.append('model', els.model.value);
+  fd.append('lang', els.lang.value);
 
   let jobId;
   try {

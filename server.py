@@ -1812,6 +1812,35 @@ async def _llm_split_sentences_batch(texts: list[str], model: str,
     return result
 
 
+# 訳文の言語。既定は日本語。
+#   script : その言語に特有の文字 (未翻訳の検出に使う)。ラテン文字の言語は None
+#   headings : 見出しの訳例 (プロンプトに入れる)
+LANGUAGES = {
+    "ja": {"name": "日本語", "en": "Japanese",
+           "script": r"[ぁ-んァ-ヴ一-龥]",
+           "headings": "Abstract → 要旨、Introduction → 序論、Methods → 方法"},
+    "en": {"name": "English", "en": "English", "script": None,
+           "headings": "keep the original headings (Abstract, Introduction, Methods)"},
+    "zh": {"name": "中文（简体）", "en": "Simplified Chinese",
+           "script": r"[一-鿿]",
+           "headings": "Abstract → 摘要, Introduction → 引言, Methods → 方法"},
+    "ko": {"name": "한국어", "en": "Korean",
+           "script": r"[가-힯]",
+           "headings": "Abstract → 초록, Introduction → 서론, Methods → 방법"},
+    "de": {"name": "Deutsch", "en": "German", "script": None,
+           "headings": "Abstract → Zusammenfassung, Introduction → Einleitung"},
+    "fr": {"name": "Français", "en": "French", "script": None,
+           "headings": "Abstract → Résumé, Introduction → Introduction"},
+    "es": {"name": "Español", "en": "Spanish", "script": None,
+           "headings": "Abstract → Resumen, Introduction → Introducción"},
+}
+DEFAULT_LANG = "ja"
+
+
+def lang_info(code: str | None) -> dict:
+    return LANGUAGES.get(code or DEFAULT_LANG, LANGUAGES[DEFAULT_LANG])
+
+
 TRANSLATE_PROMPT = """あなたは学術文書を英語→日本語に翻訳するアシスタントです。以下の入力ブロックを、指示された出力形式で日本語に翻訳してください。
 
 ## 翻訳規則
@@ -1859,6 +1888,36 @@ Robin Anger、Laetitia Pieulle
 {blocks_txt}
 """
 
+# 日本語以外に訳すときのプロンプト。日本語版 (TRANSLATE_PROMPT) は調整済みなので
+# そのまま残し、他言語はこちらを使う。規則は同じで、訳例だけ言語に依存しない形にした。
+TRANSLATE_PROMPT_OTHER = """You translate academic documents from the source language into {lang}.
+Translate each input block below into {lang}, following the output format exactly.
+
+## Rules
+1. Keep formulas, variables, chemical formulas, units and figure/equation numbers (Fig.1, Eq.(2)) as they are
+2. Keep the markup tags <b>, <i>, <sup>, <sub> on the corresponding words of the translation
+   e.g. <b>Abstract</b> → <b>{abstract}</b>, <i>S. sanguinis</i> → <i>S. sanguinis</i>
+3. Keep proper nouns (people, institutions, species names, product names) in their original spelling
+4. Keep author lists, affiliations and contacts in the same shape; never translate names, e-mail addresses, URLs or postcodes
+5. Translate headings as headings, short: {headings}
+6. No hallucination: never add information (numbers, years, compound names, citations) that is not in the source. A short source gets a short translation
+7. The previous page tail and next page head are context only — do not translate them
+8. Output only {lang}. Do not add explanations or notes
+
+## Output format
+For every `===INPUT BLOCK N===` output exactly one `===BLOCK N===`, in order.
+No preamble, no explanation, no code fences. Finish with `===END===`.
+
+## Context (do not translate)
+--- previous page tail ---
+{prev_tail}
+--- next page head ---
+{next_head}
+
+## To translate
+{blocks_txt}
+"""
+
 STRUCTURE_PROMPT = """あなたはPDFページのレイアウト解析アシスタントです。添付のページ画像と、下記の段落リストを見比べて、各段落のラベルをJSONで出力してください。
 
 ## 必須: labels は全段落を網羅すること
@@ -1903,7 +1962,7 @@ STRUCTURE_PROMPT = """あなたはPDFページのレイアウト解析アシス�
 {para_list}
 """
 
-FIGURE_PROMPT = """この画像は論文/資料中の図表です。以下を日本語で丁寧に説明してください。
+FIGURE_PROMPT = """この画像は論文/資料中の図表です。以下を{lang}で丁寧に説明してください。
 
 1. 図表の種類(グラフ/写真/模式図/表 等)
 2. 何を示しているか(軸・凡例・要素)
@@ -1993,7 +2052,8 @@ def _looks_like_hallucination(text: str, src_len: int) -> bool:
 
 async def _translate_paragraph(job_id: str, page_no: int,
                                sents: list[dict], prev_tail: str, next_head: str,
-                               model: str) -> tuple[dict[int, str], float, int]:
+                               model: str, lang: str = DEFAULT_LANG
+                               ) -> tuple[dict[int, str], float, int]:
     """1段落分の文を翻訳。出力ブロック数が少ないので信頼性が高い。
     b['_merged_src'] があれば src の代わりに使う(ページ跨ぎ文)。"""
     # 翻訳スキップ対象: references / footnote / authors / affiliation / contact
@@ -2019,11 +2079,20 @@ async def _translate_paragraph(job_id: str, page_no: int,
         if used > MAX_BLOCKS_CHARS:
             break
     blocks_txt = "\n\n".join(parts)
-    prompt = TRANSLATE_PROMPT.format(
-        prev_tail=prev_tail or "(なし)",
-        next_head=next_head or "(なし)",
-        blocks_txt=blocks_txt,
-    )
+    li = lang_info(lang)
+    if (lang or DEFAULT_LANG) == "ja":
+        prompt = TRANSLATE_PROMPT.format(
+            prev_tail=prev_tail or "(なし)",
+            next_head=next_head or "(なし)",
+            blocks_txt=blocks_txt,
+        )
+    else:
+        prompt = TRANSLATE_PROMPT_OTHER.format(
+            lang=li["en"], headings=li["headings"], abstract="Abstract",
+            prev_tail=prev_tail or "(none)",
+            next_head=next_head or "(none)",
+            blocks_txt=blocks_txt,
+        )
     # 出力上限: 入力文字数の 2倍(日本語は英語の 1.2〜1.7倍程度、余裕を持って 2倍)
     # 最小 800 tok、最大 8000 tok で暴走時のセーフティ
     num_predict = min(8000, max(800, int(total_src_chars * 2 / 3)))
@@ -2059,7 +2128,8 @@ async def _translate_paragraph(job_id: str, page_no: int,
 
 async def _translate_page(job_id: str, page_no: int, blocks: list[dict],
                           prev_tail: str, next_head: str, page_img_b64: str,
-                          model: str) -> tuple[list[dict], float, int]:
+                          model: str, lang: str = DEFAULT_LANG
+                          ) -> tuple[list[dict], float, int]:
     """段落単位でLLM呼び出しを分割して翻訳。各段落完了ごとに partial emit。
     戻り値: (blocks, elapsed, total_raw_chars)"""
     # 段落 (p フィールド) 単位でグループ化
@@ -2084,7 +2154,7 @@ async def _translate_page(job_id: str, page_no: int, blocks: list[dict],
         nh = next_head if para_idx == len(order) - 1 else ""
         try:
             res, elapsed, raw_chars = await _translate_paragraph(
-                job_id, page_no, sents, pt, nh, model
+                job_id, page_no, sents, pt, nh, model, lang
             )
         except Exception as e:
             msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
@@ -2607,7 +2677,8 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
             try:
                 if entry["blocks"]:
                     trans, llm_elapsed, raw_chars = await _translate_page(
-                        job_id, i + 1, entry["blocks"], prev_tail, next_head, page_b64, model
+                        job_id, i + 1, entry["blocks"], prev_tail, next_head, page_b64,
+                        model, job.get("lang", DEFAULT_LANG)
                     )
                     for src_b, out_b in zip(entry["blocks"], trans):
                         # 既にjaがある場合(ページ跨ぎ)は保持
@@ -2619,18 +2690,21 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
                             continue
                         cur_ja = src_b.get("ja") or ""
                         cur_src = src_b.get("src") or ""
-                        if not cur_ja or not _looks_untranslated(cur_ja, cur_src):
+                        _lang = job.get("lang", DEFAULT_LANG)
+                        _lname = lang_info(_lang)["name"]
+                        if not cur_ja or not _looks_untranslated(cur_ja, cur_src, _lang):
                             continue
                         try:
                             new_ja = await _retranslate_sentence(
                                 job_id, i + 1, src_b, entry["blocks"], model,
                                 extra_hint=(
-                                    "この文は論文タイトルです。**必ず日本語に完全に翻訳** してください。"
-                                    "学名 (斜体) や固有名詞のみ原綴りを残し、他はすべて日本語で訳出すること。"
-                                    "英単語をそのまま残して出力することは厳禁。"
+                                    f"この文は論文タイトルです。**必ず{_lname}に完全に翻訳** してください。"
+                                    "学名 (斜体) や固有名詞のみ原綴りを残し、他はすべて訳出すること。"
+                                    "原文の単語をそのまま残して出力することは厳禁。"
                                 ),
+                                lang=_lang,
                             )
-                            if new_ja and not _looks_untranslated(new_ja, cur_src):
+                            if new_ja and not _looks_untranslated(new_ja, cur_src, _lang):
                                 src_b["ja"] = new_ja
                                 _push(job_id, {"type": "page_translate_partial",
                                                "page": i + 1,
@@ -2825,8 +2899,10 @@ async def upload_pdf(
     file: UploadFile = File(...),
     max_pages: int = Form(0),
     model: str = Form(""),
+    lang: str = Form(DEFAULT_LANG),
 ):
     model = model or DEFAULT_MODEL   # 起動中のモデルは実行時に決まる
+    lang = lang if lang in LANGUAGES else DEFAULT_LANG
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "PDFファイルのみ受け付けます")
     job_id = uuid.uuid4().hex[:12]
@@ -2876,6 +2952,7 @@ async def upload_pdf(
         "created_at": time.time(),
         "event_queue": asyncio.Queue(maxsize=2048),
         "model": model,
+        "lang": lang,
         "max_pages": max_pages,
         "total_pages": total0 if preview else 0,
         "pages": [preview] if preview else [],
@@ -3056,7 +3133,8 @@ async def process_supplement(job_id: str, supp_path: Path, model: str):
                     prev_tail = _page_text(page_no - 2)[-CTX_CHARS:]
                     next_head = _page_text(page_no)[:CTX_CHARS]
                     trans, llm_elapsed, raw_chars = await _translate_page(
-                        job_id, page_no, entry["blocks"], prev_tail, next_head, page_b64, model
+                        job_id, page_no, entry["blocks"], prev_tail, next_head, page_b64,
+                        model, job.get("lang", DEFAULT_LANG)
                     )
                     for src_b, out_b in zip(entry["blocks"], trans):
                         if not src_b.get("ja"):
@@ -3242,7 +3320,7 @@ async def cancel_job(job_id: str):
     return {"ok": True, "status": job.get("status"), "note": "not running"}
 
 
-def _looks_untranslated(ja: str, src: str) -> bool:
+def _looks_untranslated(ja: str, src: str, lang: str = DEFAULT_LANG) -> bool:
     """英語原文と ja が事実上同じ (装飾差のみ) なら未翻訳とみなす。"""
     def strip_all(s: str) -> str:
         s = re.sub(r"<[^>]+>", "", s)
@@ -3258,9 +3336,10 @@ def _looks_untranslated(ja: str, src: str) -> bool:
     if len(src_s) >= 20:
         if ja_s[:min(len(ja_s), 40)] == src_s[:min(len(src_s), 40)]:
             return True
-    # 日本語文字を1つも含まない かつ ASCII の比率が高い → 未翻訳
-    has_jp = bool(re.search(r"[ぁ-んァ-ン一-龥]", ja))
-    if not has_jp:
+    # その言語に特有の文字が 1 つも無ければ未翻訳 (ラテン文字の言語は判定できないので
+    # 原文と同一かどうかだけで見る)
+    script = lang_info(lang).get("script")
+    if script and not re.search(script, ja):
         return True
     return False
 
@@ -3270,7 +3349,8 @@ async def _retranslate_sentence(job_id: str, page_no: int, block: dict,
                                 avoid_previous: bool = False,
                                 glossary: str | None = None,
                                 previous_ja: str | None = None,
-                                extra_hint: str | None = None) -> str:
+                                extra_hint: str | None = None,
+                                lang: str = DEFAULT_LANG) -> str:
     """1文を単独で翻訳(前後3文を文脈として渡す)。
     avoid_previous: 前回訳と異なる表現を促す
     glossary: 用語集(自由テキスト、各行 `英語 -> 日本語` 形式想定)
@@ -3284,11 +3364,20 @@ async def _retranslate_sentence(job_id: str, page_no: int, block: dict,
     if len(src) > 2500:
         src = src[:2500] + "…"
     blocks_txt = f"===INPUT BLOCK {block['i']}===\n{src}"
-    prompt = TRANSLATE_PROMPT.format(
-        prev_tail=prev_ctx or "(なし)",
-        next_head=next_ctx or "(なし)",
-        blocks_txt=blocks_txt,
-    )
+    li = lang_info(lang)
+    if (lang or DEFAULT_LANG) == "ja":
+        prompt = TRANSLATE_PROMPT.format(
+            prev_tail=prev_ctx or "(なし)",
+            next_head=next_ctx or "(なし)",
+            blocks_txt=blocks_txt,
+        )
+    else:
+        prompt = TRANSLATE_PROMPT_OTHER.format(
+            lang=li["en"], headings=li["headings"], abstract="Abstract",
+            prev_tail=prev_ctx or "(none)",
+            next_head=next_ctx or "(none)",
+            blocks_txt=blocks_txt,
+        )
     # 追加指示を末尾に付加
     extra_parts: list[str] = []
     if glossary and glossary.strip():
@@ -3385,6 +3474,7 @@ async def retranslate(job_id: str, body: _RetranslateBody):
             avoid_previous=body.avoid_previous,
             glossary=body.glossary,
             previous_ja=block.get("ja") if body.avoid_previous else None,
+            lang=job.get("lang", DEFAULT_LANG),
         )
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -3471,7 +3561,8 @@ async def edit_boundaries(job_id: str, body: _EditBody):
             b = blocks[kk]
             if b["p"] != target["p"] or b.get("ja"):
                 continue
-            ja = await _retranslate_sentence(job_id, body.page, b, blocks, model)
+            ja = await _retranslate_sentence(job_id, body.page, b, blocks, model,
+                                             lang=job.get("lang", DEFAULT_LANG))
             if ja:
                 b["ja"] = ja
                 updated_jas.append({"i": b["i"], "ja": ja})
@@ -3548,7 +3639,8 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
             web_txt = f"[Web検索失敗: {type(e).__name__}: {e}]"
             print(f"[chat web] error: {e}", flush=True)
 
-    prompt = f"""あなたは学術文書アシスタントです。以下の文書内容 (英語論文の日本語訳) に基づいて、ユーザーの質問に日本語で回答してください。
+    _lname = lang_info(job.get("lang", DEFAULT_LANG))["name"]
+    prompt = f"""あなたは学術文書アシスタントです。以下の文書内容 (原論文の{_lname}訳) に基づいて、ユーザーの質問に{_lname}で回答してください。
 
 ## 回答スタイル
 - 質問に対する **必要十分な情報** を、簡潔だが省略なしで答える。
@@ -3573,7 +3665,7 @@ Web検索結果を根拠として使った場合のみ末尾に `[W<n>]` を付�
 ## ユーザーの質問
 {body.message}
 
-## 回答 (日本語で、引用付き)
+## 回答 ({_lname}で、引用付き)
 """
     async def gen():
         # 先頭に Web ソースのメタデータを送出 (クライアントは [WEB_META]...[/WEB_META] を検出して抽出)
@@ -3645,6 +3737,7 @@ async def list_jobs():
             "created_at": j.get("created_at"),
             "finished_at": j.get("finished_at"),
             "supplement_status": j.get("supplement_status"),
+            "lang": j.get("lang", DEFAULT_LANG),
         })
     # 作成日時降順(新しい順)
     items.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
@@ -3698,6 +3791,13 @@ async def stream_job(job_id: str):
                 break
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/api/languages")
+async def list_languages():
+    """訳文に選べる言語。"""
+    return {"languages": [{"code": c, "name": v["name"]} for c, v in LANGUAGES.items()],
+            "default": DEFAULT_LANG}
 
 
 @app.get("/api/models")
