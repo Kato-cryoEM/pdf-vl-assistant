@@ -94,7 +94,7 @@
   .pane .pane-head {
     padding: 6px 10px; border-bottom: 1px solid var(--border);
     background: var(--panel2); font-size: 12px; color: var(--muted);
-    display: flex; justify-content: space-between;
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
   }
   .pane .pane-body { flex: 1; overflow: auto; padding: 8px; }
 
@@ -171,12 +171,23 @@
   }
 
   /* 流し込みレイアウト。ラベルに応じて段落種別のスタイルを付与 */
-  .ja-flow { padding: 4px 8px 24px; }
+  /* 訳文の書体と大きさ。見出し・キャプション等はこの値に対する倍率で決まるので、
+     1 か所変えれば全体の釣り合いを保ったまま拡大縮小できる。 */
+  .ja-flow {
+    padding: 4px 8px 24px;
+    --ja-size: 14px;
+    --ja-font: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", Meiryo, sans-serif;
+  }
+  .font-ctl { display: inline-flex; align-items: center; gap: 4px; }
+  .font-ctl select { font-size: 11px; padding: 1px 4px; }
+  .font-ctl button { font-size: 11px; padding: 2px 7px; }
+  #fontSizeLabel { font-size: 11px; color: var(--muted); min-width: 18px; text-align: center; }
   .ja-para {
     margin: 16px 0 0 0;
     padding: 8px 4px 4px 4px;
     line-height: 1.85;
-    font-size: 14px;
+    font-size: var(--ja-size);
+    font-family: var(--ja-font);
     word-break: break-word;
     position: relative;
     border-top: 1px dashed rgba(160,160,180,0.15);
@@ -276,26 +287,26 @@
   .llm-bar > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
   /* --- 種別スタイル (data-label) --- */
   .ja-para[data-label="title"] {
-    font-size: 22px; font-weight: 700; text-align: center;
+    font-size: calc(var(--ja-size) * 1.57); font-weight: 700; text-align: center;
     margin: 18px 0 10px; color: var(--text); letter-spacing: 0.02em;
   }
   .ja-para[data-label="authors"] {
-    text-align: center; font-size: 13px; margin: 2px 0; color: var(--text);
+    text-align: center; font-size: calc(var(--ja-size) * 0.93); margin: 2px 0; color: var(--text);
   }
   .ja-para[data-label="affiliation"] {
-    text-align: center; font-size: 12px; margin: 2px 0;
+    text-align: center; font-size: calc(var(--ja-size) * 0.86); margin: 2px 0;
     color: var(--muted); font-style: italic;
   }
   .ja-para[data-label="contact"] {
-    text-align: center; font-size: 12px; margin: 2px 0 14px;
+    text-align: center; font-size: calc(var(--ja-size) * 0.86); margin: 2px 0 14px;
     color: var(--muted); font-family: ui-monospace, monospace;
   }
   .ja-para[data-label="keywords"] {
-    font-size: 12px; margin: 6px 0 12px; padding: 4px 8px;
+    font-size: calc(var(--ja-size) * 0.86); margin: 6px 0 12px; padding: 4px 8px;
     background: var(--panel2); border-radius: 4px;
   }
   .ja-para[data-label="abstract_heading"], .ja-para[data-label="heading"] {
-    font-size: 17px; font-weight: 700; color: var(--accent2);
+    font-size: calc(var(--ja-size) * 1.21); font-weight: 700; color: var(--accent2);
     margin: 28px 0 10px;
     padding: 6px 8px;
     border-top: 2px solid var(--accent2);
@@ -303,7 +314,7 @@
     background: rgba(107, 214, 168, 0.06);
   }
   .ja-para[data-label="subheading"] {
-    font-size: 15px; font-weight: 700; color: var(--accent);
+    font-size: calc(var(--ja-size) * 1.07); font-weight: 700; color: var(--accent);
     margin: 24px 0 8px;
     padding: 4px 8px;
     border-left: 3px solid var(--accent);
@@ -327,7 +338,7 @@
     border-radius: 0 4px 4px 0;
   }
   .ja-para[data-label="caption"] {
-    font-size: 11px; line-height: 1.7; color: var(--muted);
+    font-size: calc(var(--ja-size) * 0.79); line-height: 1.7; color: var(--muted);
     font-style: italic; margin: 6px 0;
   }
   .ja-para[data-label="formula"] {
@@ -341,14 +352,14 @@
     cursor: zoom-in;
   }
   .ja-para[data-label="table"] {
-    font-family: ui-monospace, monospace; font-size: 12px;
+    font-family: ui-monospace, monospace; font-size: calc(var(--ja-size) * 0.86);
     background: var(--panel2); padding: 4px 8px; border-radius: 4px;
   }
   .ja-para[data-label="footnote"] {
-    font-size: 11px; color: var(--muted); margin: 2px 0;
+    font-size: calc(var(--ja-size) * 0.79); color: var(--muted); margin: 2px 0;
   }
   .ja-para[data-label="references"] {
-    font-size: 12px; color: var(--muted); margin: 2px 0;
+    font-size: calc(var(--ja-size) * 0.86); color: var(--muted); margin: 2px 0;
     padding-left: 1em; text-indent: -1em;
   }
   .ja-para[data-label="list"] {
@@ -397,7 +408,7 @@
   .ref-search-btn.primary:hover { filter: brightness(1.1); }
   /* references 段落 */
   .ja-para[data-label="references"] {
-    font-size: 12px; line-height: 1.5; color: var(--muted);
+    font-size: calc(var(--ja-size) * 0.86); line-height: 1.5; color: var(--muted);
     padding: 4px 6px; margin: 4px 0;
     border-left: 2px solid var(--border);
   }
@@ -636,6 +647,17 @@
       <div class="pane">
         <div class="pane-head">
           <span>日本語訳</span>
+          <span class="font-ctl">
+            <select id="fontFamily" title="書体">
+              <option value="sans">ゴシック</option>
+              <option value="serif">明朝</option>
+              <option value="system">システム標準</option>
+              <option value="mono">等幅</option>
+            </select>
+            <button id="fontDown" class="ghost" title="文字を小さく">A−</button>
+            <span id="fontSizeLabel">14</span>
+            <button id="fontUp" class="ghost" title="文字を大きく">A＋</button>
+          </span>
           <span id="jaHint"></span>
         </div>
         <div class="pane-body" id="jaBody">
@@ -843,6 +865,10 @@ const els = {
   llmRefresh: $('llmRefresh'),
   llmClose: $('llmClose'),
   llmHint: $('llmHint'),
+  fontFamily: $('fontFamily'),
+  fontUp: $('fontUp'),
+  fontDown: $('fontDown'),
+  fontSizeLabel: $('fontSizeLabel'),
   savedJobs: $('savedJobs'),
   loadJobBtn: $('loadJobBtn'),
   deleteJobBtn: $('deleteJobBtn'),
@@ -926,6 +952,7 @@ async function loadSavedJob(jobId, opts={}) {
     const r = await fetch(`/api/job/${jobId}`);
     if (!r.ok) throw new Error(await r.text());
     const job = await r.json();
+    if (jobId !== currentJobId) clearChat();  // 別の文書に切り替わったとき
     currentJobId = jobId;
     els.status.textContent = `ジョブ ${jobId} (${job.status})`;
     els.progressWrap.style.display = '';
@@ -1068,6 +1095,7 @@ els.submit.addEventListener('click', async () => {
   const f = els.file.files[0];
   if (!f) { alert('PDFを選択してください'); return; }
   // 状態リセット
+  clearChat();
   completedPageTimes.length = 0;
   totalPages = 0; currentPageNo = 1; pageStartTime = 0;
   pagesData = [];
@@ -2001,6 +2029,16 @@ function highlightChatCitations(answer, msgBodyEl, webSources) {
   }
 }
 
+// 別の文書に切り替えたら、前の文書についてのやり取りは消す
+// (そのまま残ると、今読んでいる文書の話だと誤読しやすい)
+function clearChat() {
+  if (!els.chatMessages) return;
+  els.chatMessages.innerHTML = '';
+  els.chatInput.value = '';
+  currentCitedIndices.clear();
+  document.querySelectorAll('.ja-sent.cited').forEach(el => el.classList.remove('cited'));
+}
+
 function addChatMsg(who, text) {
   const div = document.createElement('div');
   div.className = 'chat-msg ' + who;
@@ -2795,6 +2833,51 @@ els.ctxMenu.addEventListener('click', (e) => {
     openCommentModal(ctxTargetI);
   }
 });
+
+// ==================== 訳文の書体・文字サイズ ====================
+const FONT_STACKS = {
+  sans:   'system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", Meiryo, sans-serif',
+  serif:  '"Hiragino Mincho ProN", "Yu Mincho", YuMincho, "Noto Serif JP", "MS PMincho", serif',
+  system: 'system-ui, -apple-system, sans-serif',
+  mono:   'ui-monospace, SFMono-Regular, Menlo, "Noto Sans Mono CJK JP", monospace',
+};
+const FONT_MIN = 10, FONT_MAX = 26;
+let fontPref = {size: 14, family: 'sans'};
+
+// 見出しやキャプションは CSS 側でこの値に対する倍率になっているので、
+// 基準値を変えるだけで全体の釣り合いを保ったまま拡大縮小される。
+function applyFontPref() {
+  els.jaFlow.style.setProperty('--ja-size', fontPref.size + 'px');
+  els.jaFlow.style.setProperty('--ja-font', FONT_STACKS[fontPref.family] || FONT_STACKS.sans);
+  els.fontSizeLabel.textContent = fontPref.size;
+  els.fontFamily.value = fontPref.family;
+  try { localStorage.setItem('pdfvl.font', JSON.stringify(fontPref)); } catch (e) {}
+}
+
+function loadFontPref() {
+  try {
+    const raw = localStorage.getItem('pdfvl.font');
+    if (raw) {
+      const v = JSON.parse(raw);
+      if (v && typeof v.size === 'number') {
+        fontPref.size = Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(v.size)));
+      }
+      if (v && FONT_STACKS[v.family]) fontPref.family = v.family;
+    }
+  } catch (e) { /* localStorage が使えない環境では既定値のまま */ }
+  applyFontPref();
+}
+
+els.fontUp.addEventListener('click', () => {
+  fontPref.size = Math.min(FONT_MAX, fontPref.size + 1); applyFontPref();
+});
+els.fontDown.addEventListener('click', () => {
+  fontPref.size = Math.max(FONT_MIN, fontPref.size - 1); applyFontPref();
+});
+els.fontFamily.addEventListener('change', () => {
+  fontPref.family = els.fontFamily.value; applyFontPref();
+});
+loadFontPref();
 
 // ==================== モデル管理 ====================
 let llmDlTimer = null;
