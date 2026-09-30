@@ -77,7 +77,7 @@ Japanese is the default, but you choose the target language when you start the a
 ## Install
 
 ```bash
-git clone <this repository> pdf-vl-assistant
+git clone https://github.com/Kato-cryoEM/pdf-vl-assistant.git
 cd pdf-vl-assistant
 ./install.sh
 ```

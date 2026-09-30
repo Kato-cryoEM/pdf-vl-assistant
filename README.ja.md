@@ -60,7 +60,7 @@ AI の回答をそのまま提出するのではなく、**見落としを減ら
 ## インストール
 
 ```bash
-git clone <このリポジトリ> pdf-vl-assistant
+git clone https://github.com/Kato-cryoEM/pdf-vl-assistant.git
 cd pdf-vl-assistant
 ./install.sh
 ```
