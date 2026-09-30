@@ -338,7 +338,8 @@
     border-radius: 0 4px 4px 0;
   }
   .ja-para[data-label="caption"] {
-    font-size: calc(var(--ja-size) * 0.79); line-height: 1.7; color: var(--muted);
+    /* 色と斜体で本文と区別が付くので、大きさは本文と同じにして読みやすくする */
+    font-size: var(--ja-size); line-height: 1.7; color: var(--muted);
     font-style: italic; margin: 6px 0;
   }
   .ja-para[data-label="formula"] {
