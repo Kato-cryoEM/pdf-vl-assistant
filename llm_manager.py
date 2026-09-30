@@ -34,88 +34,92 @@ LLAMA_SEARCH_PATHS = [
     Path.home() / "app" / "llama.cpp" / "build" / "bin" / "llama-server",
 ]
 
-# 推奨モデル (すべて ggml-org 公式の GGUF。mmproj 付きで視覚入力に対応)
-# size_gb = 本体 + mmproj のおおよその合計
+# 推奨モデル。すべて mmproj 付き (視覚入力に対応) の GGUF。
+#   model_file / mmproj_file : リポジトリ内のパス (サブフォルダ可)
+#   parts                    : 分割 GGUF の分割数 (単一ファイルなら省略)
+#   size_gb                  : 本体 + mmproj のおおよその合計
+# モデルごとにサブフォルダへ入れる。mmproj-F16.gguf のように名前が衝突するため。
 CATALOG = [
     {
-        "id": "qwen3-vl-2b",
-        "name": "Qwen3-VL 2B Instruct (Q8_0)",
-        "repo": "ggml-org/Qwen3-VL-2B-Instruct-GGUF",
-        "model_file": "Qwen3-VL-2B-Instruct-Q8_0.gguf",
-        "mmproj_file": "mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf",
-        "size_gb": 2.3,
+        "id": "qwen3.5-2b",
+        "name": "Qwen3.5 2B (Q4_K_M)",
+        "repo": "unsloth/Qwen3.5-2B-GGUF",
+        "model_file": "Qwen3.5-2B-Q4_K_M.gguf",
+        "mmproj_file": "mmproj-F16.gguf",
+        "size_gb": 2.0,
         "min_ram_gb": 6,
-        "note": "一番軽い。まず動かしてみる用。精度は控えめ。",
+        "note": "一番軽い。まず動かしてみる用。訳の質は控えめ。",
     },
     {
-        "id": "qwen2.5-vl-3b",
-        "name": "Qwen2.5-VL 3B Instruct (Q4_K_M)",
-        "repo": "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF",
-        "model_file": "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
-        "size_gb": 2.8,
-        "min_ram_gb": 6,
+        "id": "qwen3.5-4b",
+        "name": "Qwen3.5 4B (Q4_K_M)",
+        "repo": "unsloth/Qwen3.5-4B-GGUF",
+        "model_file": "Qwen3.5-4B-Q4_K_M.gguf",
+        "mmproj_file": "mmproj-F16.gguf",
+        "size_gb": 3.4,
+        "min_ram_gb": 8,
         "note": "軽量。ノートPCでも動く。",
     },
     {
-        "id": "gemma3-4b",
-        "name": "Gemma 3 4B Instruct (Q4_K_M)",
-        "repo": "ggml-org/gemma-3-4b-it-GGUF",
-        "model_file": "gemma-3-4b-it-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-model-f16.gguf",
-        "size_gb": 3.3,
-        "min_ram_gb": 8,
-        "note": "日本語がやや得意。軽量帯では読みやすい訳。",
+        "id": "qwen3.5-9b",
+        "name": "Qwen3.5 9B (Q4_K_M)",
+        "repo": "unsloth/Qwen3.5-9B-GGUF",
+        "model_file": "Qwen3.5-9B-Q4_K_M.gguf",
+        "mmproj_file": "mmproj-F16.gguf",
+        "size_gb": 6.6,
+        "min_ram_gb": 12,
+        "note": "実用の下限あたり。8〜12GB クラスの GPU 向け。",
     },
     {
-        "id": "qwen2.5-vl-7b",
-        "name": "Qwen2.5-VL 7B Instruct (Q4_K_M)",
-        "repo": "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF",
-        "model_file": "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf",
-        "size_gb": 5.5,
-        "min_ram_gb": 10,
-        "note": "実用の下限あたり。8GB クラスの GPU 向け。",
-    },
-    {
-        "id": "gemma3-12b",
-        "name": "Gemma 3 12B Instruct (Q4_K_M)",
-        "repo": "ggml-org/gemma-3-12b-it-GGUF",
-        "model_file": "gemma-3-12b-it-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-model-f16.gguf",
-        "size_gb": 8.2,
+        "id": "gemma4-12b",
+        "name": "Gemma 4 12B Instruct (Q4_K_M)",
+        "repo": "unsloth/gemma-4-12b-it-GGUF",
+        "model_file": "gemma-4-12b-it-Q4_K_M.gguf",
+        "mmproj_file": "mmproj-F16.gguf",
+        "size_gb": 7.3,
         "min_ram_gb": 14,
-        "note": "日本語訳の質と速度のバランスが良い。",
+        "note": "Qwen 以外の選択肢。日本語の訳し方の癖が違う。",
     },
     {
-        "id": "gemma3-27b",
-        "name": "Gemma 3 27B Instruct (Q4_K_M)",
-        "repo": "ggml-org/gemma-3-27b-it-GGUF",
-        "model_file": "gemma-3-27b-it-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-model-f16.gguf",
-        "size_gb": 17.4,
+        "id": "qwen3.5-27b",
+        "name": "Qwen3.5 27B (Q4_K_M)",
+        "repo": "unsloth/Qwen3.5-27B-GGUF",
+        "model_file": "Qwen3.5-27B-Q4_K_M.gguf",
+        "mmproj_file": "mmproj-F16.gguf",
+        "size_gb": 17.7,
         "min_ram_gb": 24,
         "note": "24GB クラスの GPU 向け。訳がこなれる。",
     },
     {
-        "id": "qwen2.5-vl-32b",
-        "name": "Qwen2.5-VL 32B Instruct (Q4_K_M)",
-        "repo": "ggml-org/Qwen2.5-VL-32B-Instruct-GGUF",
-        "model_file": "Qwen2.5-VL-32B-Instruct-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-Qwen2.5-VL-32B-Instruct-Q8_0.gguf",
-        "size_gb": 20.6,
-        "min_ram_gb": 28,
-        "note": "図の読み取りが強い。レイアウト解析の精度重視なら。",
+        "id": "qwen3.8-27b",
+        "name": "Qwen3.8 27B (Q4_K_M)",
+        "repo": "ggml-org/Qwen3.8-27B-GGUF",
+        "model_file": "Qwen3.8-27B-Q4_K_M.gguf",
+        "mmproj_file": "mmproj-Qwen3.8-27B-BF16.gguf",
+        "size_gb": 19.9,
+        "min_ram_gb": 26,
+        "note": "この規模では最新世代。精度重視ならこれ。",
     },
     {
-        "id": "qwen3-vl-30b-a3b",
-        "name": "Qwen3-VL 30B-A3B Instruct (Q8_0, MoE)",
-        "repo": "ggml-org/Qwen3-VL-30B-A3B-Instruct-Q8_0-GGUF",
-        "model_file": "qwen3-vl-30b-a3b-instruct-q8_0.gguf",
-        "mmproj_file": "mmproj-qwen3-vl-30b-a3b-instruct-q8_0.gguf",
-        "size_gb": 33.2,
-        "min_ram_gb": 40,
-        "note": "MoE なので大きい割に速い。メモリに余裕があるならこれ。",
+        "id": "qwen3.5-35b-a3b",
+        "name": "Qwen3.5 35B-A3B (Q4_K_M, MoE)",
+        "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+        "model_file": "Qwen3.5-35B-A3B-Q4_K_M.gguf",
+        "mmproj_file": "mmproj-F16.gguf",
+        "size_gb": 22.9,
+        "min_ram_gb": 30,
+        "note": "MoE なので大きい割に速い。メモリに余裕があるなら。",
+    },
+    {
+        "id": "qwen3.8-flash-next",
+        "name": "Qwen3.8 Flash-Next (UD-Q3_K_XL, MoE 125B)",
+        "repo": "unsloth/Qwen3.8-Flash-Next-GGUF",
+        "model_file": "UD-Q3_K_XL/Qwen3.8-Flash-Next-UD-Q3_K_XL.gguf",
+        "mmproj_file": "mmproj-BF16.gguf",
+        "parts": 3,
+        "size_gb": 90.9,
+        "min_ram_gb": 100,
+        "note": "最上位。128GB 級の統合メモリ / 大容量 VRAM 向け。分割ファイル。",
     },
 ]
 
@@ -228,12 +232,35 @@ def _match_mmproj(model: Path, mmprojs: list[Path]) -> Path | None:
     return max(same_dir, key=score)
 
 
+def entry_files(entry: dict) -> list[str]:
+    """カタログ 1 件分のダウンロード対象 (リポジトリ内パス)。
+    分割 GGUF は -00001-of-0000N.gguf … に展開する。"""
+    n = int(entry.get("parts") or 1)
+    if n <= 1:
+        model = [entry["model_file"]]
+    else:
+        base = entry["model_file"][:-len(".gguf")]
+        model = [f"{base}-{i:05d}-of-{n:05d}.gguf" for i in range(1, n + 1)]
+    return model + [entry["mmproj_file"]]
+
+
+def entry_dir(entry: dict) -> Path:
+    """モデルごとの置き場所。mmproj-F16.gguf のように名前が衝突するので分ける。"""
+    return MODELS_DIR / entry["id"]
+
+
+def entry_paths(entry: dict) -> tuple[Path, Path]:
+    """(llama-server に渡すモデルのパス, mmproj のパス)。
+    分割ファイルの場合、先頭パートを渡せば llama.cpp が残りも読む。"""
+    d = entry_dir(entry)
+    return d / Path(entry_files(entry)[0]).name, d / Path(entry["mmproj_file"]).name
+
+
 def catalog_with_state() -> list[dict]:
     """推奨リストに「導入済みかどうか」を付けて返す。"""
     out = []
     for e in CATALOG:
-        model_path = MODELS_DIR / e["model_file"]
-        mmproj_path = MODELS_DIR / e["mmproj_file"]
+        model_path, mmproj_path = entry_paths(e)
         out.append({**e,
                     "installed": model_path.is_file() and mmproj_path.is_file(),
                     "path": str(model_path),
@@ -254,7 +281,7 @@ class Downloader:
         return self.task is not None and not self.task.done()
 
     def start(self, entry: dict) -> None:
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        entry_dir(entry).mkdir(parents=True, exist_ok=True)
         self.state = {
             "status": "downloading", "id": entry["id"], "name": entry["name"],
             "done_bytes": 0, "total_bytes": 0, "file": "", "error": None,
@@ -264,10 +291,11 @@ class Downloader:
 
     async def _run(self, entry: dict) -> None:
         try:
-            files = [entry["model_file"], entry["mmproj_file"]]
+            files = entry_files(entry)
+            dest_dir = entry_dir(entry)
             for i, fname in enumerate(files, 1):
-                self.state["file"] = f"{fname} ({i}/{len(files)})"
-                await self._fetch(entry["repo"], fname)
+                self.state["file"] = f"{Path(fname).name} ({i}/{len(files)})"
+                await self._fetch(entry["repo"], fname, dest_dir)
             self.state["status"] = "done"
         except asyncio.CancelledError:
             self.state["status"] = "cancelled"
@@ -276,8 +304,9 @@ class Downloader:
             self.state["status"] = "error"
             self.state["error"] = f"{type(e).__name__}: {e}"
 
-    async def _fetch(self, repo: str, fname: str) -> None:
-        dest = MODELS_DIR / fname
+    async def _fetch(self, repo: str, fname: str, dest_dir: Path) -> None:
+        # リポジトリ内はサブフォルダでも、手元は 1 つのフォルダに平らに置く
+        dest = dest_dir / Path(fname).name
         if dest.is_file():
             return
         part = dest.with_suffix(dest.suffix + ".part")

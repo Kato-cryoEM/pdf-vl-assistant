@@ -59,14 +59,14 @@ GPU を確実に使いたい場合は `FORCE_BUILD=1 ./install.sh` でソース�
 
 | モデル | 容量 | 目安メモリ |
 |---|---|---|
-| Qwen3-VL 2B | 2.3GB | 6GB |
-| Qwen2.5-VL 3B | 2.8GB | 6GB |
-| Gemma 3 4B | 3.3GB | 8GB |
-| Qwen2.5-VL 7B | 5.5GB | 10GB |
-| Gemma 3 12B | 8.2GB | 14GB |
-| Gemma 3 27B | 17.4GB | 24GB |
-| Qwen2.5-VL 32B | 20.6GB | 28GB |
-| Qwen3-VL 30B-A3B (MoE) | 33.2GB | 40GB |
+| Qwen3.5 2B | 2.0GB | 6GB |
+| Qwen3.5 4B | 3.4GB | 8GB |
+| Qwen3.5 9B | 6.6GB | 12GB |
+| Gemma 4 12B | 7.3GB | 14GB |
+| Qwen3.5 27B | 17.7GB | 24GB |
+| Qwen3.8 27B | 19.9GB | 26GB |
+| Qwen3.5 35B-A3B (MoE) | 22.9GB | 30GB |
+| Qwen3.8 Flash-Next (MoE 125B) | 90.9GB | 100GB |
 
 モデルが動いたら、PDF を選んで「解析開始」を押します。1 ページ目はおよそ 1 分で読めるようになり、あとは終わったページから順に増えていきます。
 
