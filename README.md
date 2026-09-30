@@ -17,7 +17,12 @@ Read English research papers with a **local vision-capable LLM**. Each page is a
 - **数式はそのまま画像で表示** — 文字として取り出すと項ごとにバラバラになるため、元ページから切り出して貼る
 - **サプリメンタル PDF の追加解析** — 本編と番号空間を分け、「Supplementary Fig. 2」から正しく引ける
 - **解析中でも読める** — 終わったページから順に表示。中断・再開・リロードに耐える
-- **文へのコメント**、**文書内チャット**
+- **文へのコメント**を残せる
+- **翻訳だけでなく、要約や質問を AI に尋ねられる** — 全ページまたは現在のページを対象に質問でき、回答中の引用マーカーをクリックすると根拠になった原文へ飛べる（任意で Web 検索も併用可）
+
+### 査読原稿にも使えます
+
+出版社から依頼される査読原稿は、第三者に渡せない未公開の機密文書です。このツールは**解析も翻訳も質問もすべて手元で完結し、原稿が外に出ない**ため、査読原稿を安心して読み込めます。対訳で内容を把握し、気になった箇所にコメントを残し、チャットで新規性・実験計画の妥当性・根拠が不足している箇所などを尋ねて、**査読コメントの下書きをローカル LLM で作る**という使い方ができます。詳しくは [README.ja.md](README.ja.md#査読peer-review原稿にも使えます) をご覧ください。
 
 ### 使い方
 
@@ -45,7 +50,17 @@ Read English research papers with a **local vision-capable LLM**. Each page is a
 - **Supplementary PDFs** — numbered separately from the main text, so "Supplementary Fig. 2" resolves correctly
 - **Readable while it runs** — pages appear as they finish; survives interruption, resume and browser reloads
 - **Comments on sentences** — saved to disk
-- **Chat about the document**
+- **Ask, don't just read** — chat over the whole document or a single page for summaries and questions. Citation markers in the answer jump to the sentence it came from, so you can check what it based the answer on. Optional web search for background knowledge (off by default)
+
+## Reviewing manuscripts
+
+Manuscripts you are asked to peer-review are unpublished, confidential documents that you are not free to hand to a third party — which rules out cloud AI services in most cases.
+
+Everything here runs on your own machine: the analysis, the translation and the questions. The manuscript never leaves it (the only exception is the optional web search, which sends your question text — not the manuscript — to a search service, and is off by default).
+
+So you can load a manuscript under review, read it side by side, leave comments on the parts that concern you, and use the chat to ask about novelty, the soundness of the experimental design, or where claims are not supported — and **draft your review comments with a local LLM**.
+
+Treat the answers as a way to draft and to catch what you missed, not as the review itself: the judgement and the responsibility remain yours. Policies on using generative AI in peer review differ between publishers — check the terms of the invitation, even for a local model.
 
 ## Requirements
 
