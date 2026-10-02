@@ -132,6 +132,8 @@ Add a supplementary PDF with "📎 サプリ追加" once the main document has b
 | `PDFVL_MODEL` | — | Default model name |
 | `PDFVL_MODELS_DIR` | `./models` | Where models are stored |
 | `LLAMA_SERVER_BIN` | — | Path to `llama-server` |
+| `PAGE_ANALYSIS` | `combined` | `combined`: sentence boundaries and page structure in one LLM call per page (the page image is read once). `separate`: two calls |
+| `SENT_SPLIT_MODE` | `join` | With `PAGE_ANALYSIS=separate`: `join` asks only which candidate cuts are not boundaries; `copy` has the LLM rewrite the text with `|` marks (slower) |
 
 ## Where data lives
 
@@ -143,7 +145,7 @@ Both are gitignored.
 ## How it works
 
 1. PyMuPDF extracts text, coordinates and font attributes page by page
-2. The page image goes to the LLM, which decides sentence boundaries and structure (headings, captions, body)
+2. The text is cut at every candidate sentence boundary; one LLM call with the page image answers which cuts are not real boundaries (Fig., et al., initials ...) and which paragraphs are running headers/footers or should be joined. Headings, captions and body are labelled from font and keywords
 3. Paragraphs are translated; sentences split across a page break are joined first
 4. Figures, tables and equations are cropped from the original page using their coordinates
 5. Results stream to the browser as they are produced (SSE)

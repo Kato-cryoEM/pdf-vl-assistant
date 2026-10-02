@@ -1096,10 +1096,11 @@ async def extract_page_sentences_llm(page: fitz.Page, zoom: float, model: str,
     if not sub_blocks:
         return []
     texts = [sb["joined"] for sb in sub_blocks]
-    # ページ画像を base64 で用意 (VL に視覚情報として渡す)
+    # ページ画像を base64 で用意 (VL に視覚情報として渡す)。
+    # 構造検出・図番号の特定に送る pNNN.jpg (JPEG 品質 85) と同じバイト列にする:
+    # 画像が同一なら LLM サーバーが読み込み済みの画像をキャッシュから再利用でき、その分の読み込みが省ける。
     try:
-        page_img, _z = render_page_image(page)
-        image_b64 = pil_to_b64(page_img)
+        image_b64 = _page_jpeg_b64(page)
     except Exception:
         image_b64 = None
     ranges_per_sub = await _llm_split_sentences_batch(
@@ -1702,6 +1703,190 @@ Output:
 """
 
 
+# 文境界検出の方式。
+#   join (既定): 句読点の位置で候補の断片に切っておき、LLM には「区切りではない候補」の番号だけを答えさせる。
+#                出力が数十トークンで済むので、本文を書き写させる copy より速い。
+#   copy       : 本文を書き写させて `|` を挿入させる (従来の方式)。
+SENT_SPLIT_MODE = os.environ.get("SENT_SPLIT_MODE", "join")
+
+SENT_JOIN_PROMPT = """You are a sentence boundary detector for academic PDFs.
+
+The text below has been cut into numbered pieces at every candidate sentence boundary (after `.`, `!`, `?` and similar). Most cuts are real sentence boundaries. Find the cuts that are NOT real boundaries: the piece must then be joined to the piece before it.
+
+A cut is NOT a real boundary when it falls:
+- after an abbreviation (Fig., Figs., Eq., Ref., Sec., Vol., No., pp., Ch., et al., e.g., i.e., etc., vs., approx., ca., Dr., Prof., Mr., Mrs., Ms., St., Inc., Ltd., Co.);
+- after a species/name initial (S. sanguinis, E. coli, J. Smith);
+- inside a URL, email address, file path, or a number;
+- inside a citation such as <sup>15</sup>.
+A short heading of 1-3 words that runs into the following text is its own sentence: keep that cut.
+
+Output (STRICT, one line): `JOIN: ` followed by the numbers of the pieces to join to the previous piece, separated by commas, or `JOIN: none`.
+Do not write anything else.
+
+Pieces:
+{pieces_txt}
+
+Output:
+"""
+
+# 候補の切れ目: 文末記号 (+ 閉じ括弧・引用符・上付き引用) の後の空白、または空白なしで大文字が続く所。全角の文末記号はその直後。
+_CAND_CUT_RE = re.compile(
+    r"(?<=[.!?])[\"'”’)\]]*(?:<sup>[^<]{0,40}</sup>)?(?:</(?:i|b|sup|sub)>)?(?:\s+|(?=[A-Z]))"
+    r"|(?<=[。！？])\s*")
+
+
+def _candidate_cuts(text: str) -> list[int]:
+    """文の開始になりうる位置 (0 を除く) の一覧。"""
+    cuts = []
+    for m in _CAND_CUT_RE.finditer(text):
+        before = text[:m.start()]
+        if before.endswith((".", "!", "?")):
+            # イニシャル (A. / S.L. / J. Smith) は文末にならないので候補にしない
+            if re.search(r"(?:^|[\s(\[.\-])[A-Z]\.$", before):
+                continue
+            # 空白なしで大文字が続く所は、小文字2文字以上の単語の後だけ (word.Next)
+            if not re.search(r"\s", m.group()) and not re.search(r"[a-z]{2}[.!?]$", before):
+                continue
+        pos = m.end()
+        if 0 < pos < len(text) and text[pos:].strip():
+            cuts.append(pos)
+    return sorted(set(cuts))
+
+
+def _join_pieces(texts: list[str]) -> list[tuple[int, int, int]]:
+    """各ブロックを候補の切れ目で断片に切る。戻り値 (block, start, end) の並び。番号は添字 + 1。"""
+    pieces: list[tuple[int, int, int]] = []
+    for bi, t in enumerate(texts):
+        starts = [0] + _candidate_cuts(t)
+        for k, s in enumerate(starts):
+            e = starts[k + 1] if k + 1 < len(starts) else len(t)
+            pieces.append((bi, s, e))
+    return pieces
+
+
+def _pieces_listing(texts: list[str], pieces: list[tuple[int, int, int]], unit: str) -> str:
+    """LLM に見せる断片の一覧。ブロックごとに `=== {unit} N ===` の見出しを付ける。"""
+    lines = []
+    for n, (bi, s, e) in enumerate(pieces, 1):
+        head = f"=== {unit} {bi} ===\n" if s == 0 else ""
+        lines.append(f"{head}[{n}] {texts[bi][s:e].strip()}")
+    return "\n".join(lines)
+
+
+def _ranges_from_joins(texts: list[str], pieces: list[tuple[int, int, int]],
+                       joins: set[int]) -> list[list[tuple[int, int]]]:
+    """断片を文の範囲にまとめる。joins の番号の断片は前の文に結合する。"""
+    result: list[list[tuple[int, int]]] = [[] for _ in texts]
+    for n, (bi, s, e) in enumerate(pieces, 1):
+        if s > 0 and n in joins and result[bi]:
+            result[bi][-1] = (result[bi][-1][0], e)  # 前の文に結合
+        elif s > 0 and result[bi] and not texts[bi][s:e].strip():
+            result[bi][-1] = (result[bi][-1][0], e)  # 空白だけの断片も前に寄せる
+        else:
+            result[bi].append((s, e))
+    return [r or _split_sentences_ranges(t) for r, t in zip(result, texts)]
+
+
+async def _llm_split_sentences_join(texts: list[str], model: str,
+                                    page_no: int | None = None,
+                                    image_b64: str | None = None) -> list[list[tuple[int, int]]]:
+    """join 方式の文境界検出。各ブロックを候補の断片に切り、LLM が「区切りではない」と答えた切れ目を消す。"""
+    pieces = _join_pieces(texts)
+    joins: set[int] = set()
+    if len(pieces) > len(texts):                     # 候補の切れ目が無ければ LLM に聞かない
+        user_msg = {"role": "user",
+                    "content": SENT_JOIN_PROMPT.format(pieces_txt=_pieces_listing(texts, pieces, "block"))}
+        if image_b64:
+            user_msg["images"] = [image_b64]
+        llm_start = time.time()
+        try:
+            raw = await llm_chat([user_msg], model=model, temperature=0.0, max_tokens=400)
+        except Exception as e:
+            print(f"[sent_split P{page_no}] LLM error: {e}", flush=True)
+            return [_split_sentences_ranges(t) for t in texts]
+        m = re.search(r"JOIN:\s*(.*)", raw, re.I)
+        if not m:
+            print(f"[sent_split P{page_no}] unparsable join output: {raw[:200]!r}", flush=True)
+            return [_split_sentences_ranges(t) for t in texts]
+        joins = {int(x) for x in re.findall(r"\d+", m.group(1))}
+        if page_no is not None:
+            print(f"[sent_split P{page_no}] {round(time.time() - llm_start, 2)}s (join), "
+                  f"{len(pieces)} pieces, join={sorted(joins)}, {len(texts)}blocks", flush=True)
+    return _ranges_from_joins(texts, pieces, joins)
+
+
+# 1 ページの解析 (文境界 + 構造) を 1 回の LLM 呼び出しで行う。
+# 文境界検出と構造検出を別々に呼ぶと、ページ画像 (~2,000 トークン) を 2 回読み込むことになる。
+# 構造検出で使うのは exclude (ヘッダ・フッタ・ページ番号) と merge (段落の結合) だけなので
+# (段落ラベルはヒューリスティックで付ける)、その2つと join をまとめて JSON で答えさせる。
+#   PAGE_ANALYSIS=combined (既定) / separate (文境界検出と構造検出を別々に呼ぶ)
+PAGE_ANALYSIS = os.environ.get("PAGE_ANALYSIS", "combined")
+
+PAGE_ANALYSIS_PROMPT = """You analyze one page of an academic PDF. The page image is attached. Below, the page text is listed as numbered paragraphs (=== paragraph N ===), automatically extracted. Each paragraph has been cut into numbered pieces [n] at every candidate sentence boundary (after `.`, `!`, `?` and similar).
+
+Answer three things:
+
+1. "join": the numbers of the pieces whose cut before them is NOT a real sentence boundary (the piece must be joined to the piece before it). Most cuts are real boundaries. A cut is NOT a real boundary when it falls:
+   - after an abbreviation (Fig., Figs., Eq., Ref., Sec., Vol., No., pp., Ch., et al., e.g., i.e., etc., vs., approx., ca., Dr., Prof., Mr., Mrs., Ms., St., Inc., Ltd., Co.);
+   - after a species/name initial (S. sanguinis, E. coli, J. Smith);
+   - inside a URL, email address, file path, or a number;
+   - inside a citation such as <sup>15</sup>.
+   A short heading of 1-3 words that runs into the following text is its own sentence: keep that cut.
+2. "exclude": the paragraph numbers that are ONLY a running header, footer or page number (never exclude anything else). Usually [].
+3. "merge": pairs [a, b] of ADJACENT paragraph numbers that are visibly one paragraph on the page image but were split. Usually [] - at most 1-2 pairs, never chain three or more.
+
+Output ONLY a JSON object, no explanation, no code fences:
+{{"join": [], "exclude": [], "merge": []}}
+
+{pieces_txt}
+"""
+
+
+def _page_jpeg_b64(page: fitz.Page) -> str:
+    """ページ画像 (pNNN.jpg と同じ JPEG 品質 85) の base64。"""
+    page_img, _z = render_page_image(page)
+    buf = io.BytesIO()
+    page_img.convert("RGB").save(buf, "JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+async def analyze_page_llm(page: fitz.Page, zoom: float, model: str,
+                           page_no: int | None = None) -> tuple[list[dict], dict | None]:
+    """文境界と構造 (exclude / merge) を 1 回の LLM 呼び出しで求める。
+    戻り値: (文の一覧, 構造の答え)。構造の答えは段落番号 = サブブロック番号 (= 文の "p") で、
+    LLM が答えなかった・読めなかった時は None (呼び出し側は構造補正をしない)。"""
+    sub_blocks = _prepare_sub_blocks(page, zoom)
+    if not sub_blocks:
+        return [], None
+    texts = [sb["joined"] for sb in sub_blocks]
+    pieces = _join_pieces(texts)
+    user_msg = {"role": "user",
+                "content": PAGE_ANALYSIS_PROMPT.format(pieces_txt=_pieces_listing(texts, pieces, "paragraph"))}
+    try:
+        user_msg["images"] = [_page_jpeg_b64(page)]
+    except Exception:
+        pass
+    llm_start = time.time()
+    obj = None
+    try:
+        raw = await llm_chat([user_msg], model=model, temperature=0.0, max_tokens=600, format_json=True)
+        m = re.search(r"\{.*\}", raw, re.S)
+        obj = json.loads(m.group(0)) if m else None
+    except Exception as e:
+        print(f"[page_analysis P{page_no}] LLM error: {e}", flush=True)
+    elapsed = round(time.time() - llm_start, 2)
+    if not isinstance(obj, dict):
+        print(f"[page_analysis P{page_no}] no usable answer, falling back to pysbd", flush=True)
+        return _finalize_sentences(sub_blocks, [_split_sentences_ranges(t) for t in texts], zoom), None
+    joins = {int(x) for x in obj.get("join") or [] if str(x).isdigit()}
+    print(f"[page_analysis P{page_no}] {elapsed}s, {len(pieces)} pieces, join={sorted(joins)}, "
+          f"exclude={obj.get('exclude')}, merge={obj.get('merge')}, {len(texts)} paragraphs", flush=True)
+    sentences = _finalize_sentences(sub_blocks, _ranges_from_joins(texts, pieces, joins), zoom)
+    obj["_n_para"] = len(sub_blocks)
+    obj["_elapsed"] = elapsed
+    return sentences, obj
+
+
 def _find_offsets_from_delimited(vl_content: str, original_text: str) -> list[int]:
     """VL の "|" 区切り出力から原文中の文開始オフセットを求める。
     VL は文と文の境界の空白を "|" で置き換える傾向があるため、単純に "|" を数えるのではなく
@@ -1747,6 +1932,8 @@ async def _llm_split_sentences_batch(texts: list[str], model: str,
     失敗ブロックは pysbd フォールバック。戻り値: 各ブロックの (start, end) 範囲リスト。"""
     if not texts:
         return []
+    if SENT_SPLIT_MODE == "join":
+        return await _llm_split_sentences_join(texts, model, page_no=page_no, image_b64=image_b64)
     # check.py と同じ: 全ブロックを ===BLOCK N=== で連結
     blocks_txt = "\n\n".join(f"===BLOCK {i}===\n{t}" for i, t in enumerate(texts))
     prompt = SENT_SPLIT_PROMPT.format(blocks_txt=blocks_txt)
@@ -2196,61 +2383,10 @@ async def _translate_page(job_id: str, page_no: int, blocks: list[dict],
             total_elapsed, total_chars)
 
 
-async def _detect_structure(job_id: str, page_no: int, sentences: list[dict],
-                            page_img_b64: str, model: str) -> tuple[list[dict], float]:
-    """アプローチC: VLに視覚レイアウト補正を依頼。sentences を書き換えて返す。
-    戻り値: (補正済 sentences, elapsed)"""
-    # 段落単位のプレビューを組み立て
-    from collections import defaultdict
-    para_map: dict[int, list[dict]] = defaultdict(list)
-    for s in sentences:
-        para_map[s.get("p", s["i"])].append(s)
-    pids = sorted(para_map.keys())
-    # LLM に渡すために 0-based 連番へリマップ (元の p は歯抜けや大きい値の場合があるため)
-    new_to_orig = pids[:]  # index=new_id, value=orig_pid
-    orig_to_new = {p: n for n, p in enumerate(pids)}
-    para_list_lines = []
-    for new_id, orig_pid in enumerate(pids):
-        text = " ".join(s["src"] for s in para_map[orig_pid])
-        preview = re.sub(r"<[^>]+>", "", text)
-        max_len = 400 if len(pids) <= 20 else 220
-        if len(preview) > max_len:
-            preview = preview[:max_len] + "…"
-        para_list_lines.append(f"[{new_id}] {preview}")
-    para_list_txt = "\n".join(para_list_lines)
-    print(f"[structure P{page_no}] sentences={len(sentences)}, unique p count={len(pids)}, orig_p sample={pids[:10]}", flush=True)
-    prompt = STRUCTURE_PROMPT.format(para_list=para_list_txt)
-    messages = [{"role": "user", "content": prompt, "images": [page_img_b64]}]
-    _push(job_id, {"type": "structure_start", "page": page_no})
-    start = time.time()
-    buf: list[str] = []
-    async for chunk in llm_chat_stream(messages, model=model):
-        piece = chunk.get("response", "")
-        if piece:
-            buf.append(piece)
-        if chunk.get("done"):
-            break
-    elapsed = round(time.time() - start, 2)
-    raw = "".join(buf)
-    print(f"[structure P{page_no}] raw({len(raw)}chars):\n{raw}\n[/structure P{page_no}]", flush=True)
-    _push(job_id, {"type": "debug", "page": page_no,
-                   "kind": "structure_raw", "text": raw[:2000]})
-    # JSON パース (最外の {} を貪欲マッチ、失敗したら短いマッチも試す)
-    obj = None
-    for pat in (r"\{.*\}", r"\{[^{}]*\}"):
-        try:
-            m = re.search(pat, raw, re.S)
-            if m:
-                obj = json.loads(m.group(0))
-                break
-        except Exception:
-            continue
-    if obj is None:
-        _push(job_id, {"type": "debug", "page": page_no,
-                       "kind": "structure_parse_fail"})
-        return sentences, elapsed
-    _push(job_id, {"type": "debug", "page": page_no, "kind": "structure_json",
-                   "text": json.dumps(obj, ensure_ascii=False)[:1000]})
+def _apply_structure(job_id: str, page_no: int, sentences: list[dict], obj: dict,
+                     pids: list[int], new_to_orig: list[int], elapsed: float) -> tuple[list[dict], float]:
+    """構造検出の答え (exclude / merge) を文の一覧に反映する。
+    pids: 文に現れる段落番号 (p)、new_to_orig: LLM が答えた段落番号 → p の対応。"""
     total_paras = len(pids)
     # LLM 返却の index はリマップした 0-based。orig_pid へ戻す
     def _to_orig(x):
@@ -2343,6 +2479,64 @@ async def _detect_structure(job_id: str, page_no: int, sentences: list[dict],
         "excluded": len(exclude), "merged": len(merge_pairs),
     })
     return new_sents, elapsed
+
+
+async def _detect_structure(job_id: str, page_no: int, sentences: list[dict],
+                            page_img_b64: str, model: str) -> tuple[list[dict], float]:
+    """アプローチC: VLに視覚レイアウト補正を依頼。sentences を書き換えて返す。
+    戻り値: (補正済 sentences, elapsed)"""
+    # 段落単位のプレビューを組み立て
+    from collections import defaultdict
+    para_map: dict[int, list[dict]] = defaultdict(list)
+    for s in sentences:
+        para_map[s.get("p", s["i"])].append(s)
+    pids = sorted(para_map.keys())
+    # LLM に渡すために 0-based 連番へリマップ (元の p は歯抜けや大きい値の場合があるため)
+    new_to_orig = pids[:]  # index=new_id, value=orig_pid
+    orig_to_new = {p: n for n, p in enumerate(pids)}
+    para_list_lines = []
+    for new_id, orig_pid in enumerate(pids):
+        text = " ".join(s["src"] for s in para_map[orig_pid])
+        preview = re.sub(r"<[^>]+>", "", text)
+        max_len = 400 if len(pids) <= 20 else 220
+        if len(preview) > max_len:
+            preview = preview[:max_len] + "…"
+        para_list_lines.append(f"[{new_id}] {preview}")
+    para_list_txt = "\n".join(para_list_lines)
+    print(f"[structure P{page_no}] sentences={len(sentences)}, unique p count={len(pids)}, orig_p sample={pids[:10]}", flush=True)
+    prompt = STRUCTURE_PROMPT.format(para_list=para_list_txt)
+    messages = [{"role": "user", "content": prompt, "images": [page_img_b64]}]
+    _push(job_id, {"type": "structure_start", "page": page_no})
+    start = time.time()
+    buf: list[str] = []
+    async for chunk in llm_chat_stream(messages, model=model):
+        piece = chunk.get("response", "")
+        if piece:
+            buf.append(piece)
+        if chunk.get("done"):
+            break
+    elapsed = round(time.time() - start, 2)
+    raw = "".join(buf)
+    print(f"[structure P{page_no}] raw({len(raw)}chars):\n{raw}\n[/structure P{page_no}]", flush=True)
+    _push(job_id, {"type": "debug", "page": page_no,
+                   "kind": "structure_raw", "text": raw[:2000]})
+    # JSON パース (最外の {} を貪欲マッチ、失敗したら短いマッチも試す)
+    obj = None
+    for pat in (r"\{.*\}", r"\{[^{}]*\}"):
+        try:
+            m = re.search(pat, raw, re.S)
+            if m:
+                obj = json.loads(m.group(0))
+                break
+        except Exception:
+            continue
+    if obj is None:
+        _push(job_id, {"type": "debug", "page": page_no,
+                       "kind": "structure_parse_fail"})
+        return sentences, elapsed
+    _push(job_id, {"type": "debug", "page": page_no, "kind": "structure_json",
+                   "text": json.dumps(obj, ensure_ascii=False)[:1000]})
+    return _apply_structure(job_id, page_no, sentences, obj, pids, new_to_orig, elapsed)
 
 
 _FIG_ID_PROMPT = """This is an image of a page from an academic paper that contains one or more figures.
@@ -2467,6 +2661,7 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
     job = JOBS[job_id]
     job["status"] = "running"
     job["started_at"] = time.time()
+    prefetch_tasks: dict[int, asyncio.Task] = {}     # ページ番号 → テキスト構造抽出の先読みタスク
     try:
         doc = fitz.open(pdf_path)
         total = min(len(doc), max_pages) if max_pages > 0 else len(doc)
@@ -2506,6 +2701,7 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
         job["pages"] = all_pages_meta
 
         prescanned: set[int] = set()
+        page_structure: dict[int, dict | None] = {}  # PAGE_ANALYSIS=combined: ページ → 構造の答え
 
         async def ensure_blocks(idx: int) -> None:
             """そのページのテキスト構造を(まだなら)抽出する。"""
@@ -2515,8 +2711,12 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
             pg = doc[idx]
             _push(job_id, {"type": "stage", "page": idx + 1, "msg": "LLM文境界検出中"})
             try:
-                blocks = await extract_page_sentences_llm(pg, zoom, model, job_id=job_id,
-                                                          page_no=idx + 1)
+                if PAGE_ANALYSIS == "combined":
+                    # 文境界と構造を 1 回で。構造の答えはページを処理する時に反映する
+                    blocks, page_structure[idx] = await analyze_page_llm(pg, zoom, model, page_no=idx + 1)
+                else:
+                    blocks = await extract_page_sentences_llm(pg, zoom, model, job_id=job_id,
+                                                              page_no=idx + 1)
             except Exception as e:
                 print(f"[prescan P{idx+1}] LLM sentence split failed: {e}, falling back to pysbd",
                       flush=True)
@@ -2524,6 +2724,17 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
             attach_formula_images(pg, blocks, zoom, job_id, idx + 1)
             all_pages_meta[idx]["blocks"] = blocks
             all_pages_meta[idx]["text_len"] = sum(len(b["src"]) for b in blocks)
+
+        def prefetch_blocks(idx: int) -> None:
+            """そのページのテキスト構造の抽出を、まだなら裏で始める。"""
+            if 0 <= idx < total and idx not in prefetch_tasks:
+                prefetch_tasks[idx] = asyncio.create_task(ensure_blocks(idx))
+
+        async def blocks_ready(idx: int) -> None:
+            """そのページのテキスト構造が揃うまで待つ (始まっていなければ始める)。"""
+            prefetch_blocks(idx)
+            if idx in prefetch_tasks:
+                await prefetch_tasks[idx]
 
         _push(job_id, {"type": "job_meta", "total_pages": total})
         # ドキュメント全体から figure legends (Figure N: ...) を先に収集
@@ -2545,9 +2756,11 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
             page_start_ts = time.time()
             img_path = pages_dir / f"p{i+1:03d}.jpg"
 
-            await ensure_blocks(i)
-            # ページ跨ぎ文の結合と前後文脈に次ページのブロックが要るので 1 ページ先読み
-            await ensure_blocks(i + 1)
+            await blocks_ready(i)
+            # ページ跨ぎ文の結合と前後文脈に次ページのブロックが要るので 1 ページ先読み。
+            # LLM サーバーは 2 本同時に処理できるので、このページの構造検出と並行して進め、
+            # 実際に要る所 (ページ跨ぎ文の検出の直前) で待つ。
+            prefetch_blocks(i + 1)
 
             # プレビュー済みのページ1はここで indexed を通知 (画像は既にある)
             if i == 0 and preview_page1:
@@ -2568,14 +2781,6 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
                            "blocks": len(entry.get("blocks", [])),
                            "text_len": entry.get("text_len") or sum(len(b.get("src","")) for b in entry.get("blocks",[]))})
 
-            # 前後の文脈(生テキスト、既に prescan で取得済)
-            def _page_text(idx):
-                if idx < 0 or idx >= total:
-                    return ""
-                return "\n".join(b["src"] for b in all_pages_meta[idx]["blocks"])
-            prev_tail = _page_text(i - 1)[-CTX_CHARS:]
-            next_head = _page_text(i + 1)[:CTX_CHARS]
-
             with open(img_path, "rb") as f:
                 page_b64 = base64.b64encode(f.read()).decode()
 
@@ -2588,9 +2793,20 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
                     _p_dist[_pv] = _p_dist.get(_pv, 0) + 1
                 print(f"[proc P{i+1}] pre-structure sentences={len(entry['blocks'])}, p_distribution={dict(list(_p_dist.items())[:20])}", flush=True)
                 try:
-                    corrected, _s_elapsed = await _detect_structure(
-                        job_id, i + 1, entry["blocks"], page_b64, model
-                    )
+                    if i in page_structure:
+                        # 文境界と一緒に答えてもらった構造を反映する (段落番号 = サブブロック番号 = p)
+                        sobj = page_structure.pop(i)
+                        if sobj is None:
+                            corrected, _s_elapsed = entry["blocks"], 0.0
+                        else:
+                            pids = sorted({b.get("p", b["i"]) for b in entry["blocks"]})
+                            corrected, _s_elapsed = _apply_structure(
+                                job_id, i + 1, entry["blocks"], sobj, pids,
+                                list(range(sobj["_n_para"])), sobj["_elapsed"])
+                    else:
+                        corrected, _s_elapsed = await _detect_structure(
+                            job_id, i + 1, entry["blocks"], page_b64, model
+                        )
                     entry["blocks"] = corrected
                     _p_dist2 = {}
                     for _b in corrected:
@@ -2643,6 +2859,17 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
                         if _ref_start_re.match(plain):
                             job["_references_started"] = True
                             # 見出し自身は heading のまま維持
+
+            # ここから次ページのブロックが要る (並行して進めていた先読みを待つ)
+            await blocks_ready(i + 1)
+
+            # 前後の文脈(生テキスト、prescan で取得済)
+            def _page_text(idx):
+                if idx < 0 or idx >= total:
+                    return ""
+                return "\n".join(b["src"] for b in all_pages_meta[idx]["blocks"])
+            prev_tail = _page_text(i - 1)[-CTX_CHARS:]
+            next_head = _page_text(i + 1)[:CTX_CHARS]
 
             # ページ跨ぎ文の検出: 現ページの末尾文が文末記号で終わっていなければ、
             # 次ページ(まだ構造補正前だが prescan 済)の先頭文と結合して翻訳する。
@@ -2892,6 +3119,9 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
         job["error"] = str(e)
         _push(job_id, {"type": "error", "message": str(e)})
         _save_job_state(job_id)
+    finally:
+        for t in prefetch_tasks.values():           # 中止・エラー時に裏の先読みを残さない
+            t.cancel()
 
 
 @app.post("/api/upload")
