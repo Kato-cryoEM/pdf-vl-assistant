@@ -1729,6 +1729,10 @@ Pieces:
 Output:
 """
 
+# 新しい図表キャプションの書き出し (Fig. 2 / Figure S1 / Table 3 / Supplementary Figure 4 / 図 5 / 表 1)
+_CAPTION_START_RE = re.compile(
+    r"(?:supplementary\s+|extended\s+data\s+)?(?:fig(?:ure)?s?\.?|table|図|表)\s*S?\d", re.I)
+
 # 候補の切れ目: 文末記号 (+ 閉じ括弧・引用符・上付き引用) の後の空白、または空白なしで大文字が続く所。全角の文末記号はその直後。
 _CAND_CUT_RE = re.compile(
     r"(?<=[.!?])[\"'”’)\]]*(?:<sup>[^<]{0,40}</sup>)?(?:</(?:i|b|sup|sub)>)?(?:\s+|(?=[A-Z]))"
@@ -2884,13 +2888,26 @@ async def process_pdf(job_id: str, pdf_path: Path, max_pages: int, model: str,
                 last_sent = entry["blocks"][-1]
                 last_label = last_sent.get("label") or "body"
                 plain = re.sub(r"<[^>]+>", "", last_sent["src"]).rstrip()
+                # 図表のキャプション (レジェンド) も、文の途中で次ページへ続く時は本文と同じく結合する。
+                # 「Figure 2 | Overview」のような題だけの行は対象外にするため、
+                # 小文字・数字・読点などで終わる (= 明らかに文の途中) 時に限る。
+                caption_title = (_CAPTION_START_RE.match(plain) is not None
+                                 and len(plain) < 100 and "," not in plain)
+                caption_cont = (last_label == "caption" and not caption_title
+                                and re.search(r"[a-z0-9,;:(\-–]$", plain) is not None)
                 if (plain and plain[-1] not in ".!?。！？"
-                        and last_label not in _NON_MERGE_LABELS):
+                        and (last_label not in _NON_MERGE_LABELS or caption_cont)):
                     next_blocks = all_pages_meta[i + 1]["blocks"]
                     if next_blocks:
                         first_next = next_blocks[0]
                         first_label = first_next.get("label") or "body"
-                        if first_label not in _NON_MERGE_LABELS:
+                        first_plain = re.sub(r"<[^>]+>", "", first_next["src"]).lstrip()
+                        # キャプションの続きは次ページで caption と判定されることがある。
+                        # ただし新しい図表のキャプション (Fig. 2 / Table 1 / 図 3 ...) なら続きではない
+                        next_ok = ((first_label not in _NON_MERGE_LABELS
+                                    or (caption_cont and first_label == "caption"))
+                                   and not (caption_cont and _CAPTION_START_RE.match(first_plain)))
+                        if next_ok:
                             # 結合文を作成(既存の <sup>/<sub> タグも保持)
                             merged = last_sent["src"].rstrip() + " " + first_next["src"].lstrip()
                             last_sent["_merged_src"] = merged
