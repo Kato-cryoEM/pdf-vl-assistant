@@ -50,7 +50,7 @@ Read English research papers with a **local vision-capable LLM**. Each page is a
 - **Supplementary PDFs** — numbered separately from the main text, so "Supplementary Fig. 2" resolves correctly
 - **Readable while it runs** — pages appear as they finish; survives interruption, resume and browser reloads
 - **Comments on sentences** — saved to disk
-- **Ask, don't just read** — chat over the whole document or a single page for summaries and questions. Citation markers in the answer jump to the sentence it came from, so you can check what it based the answer on. Optional web search for background knowledge (off by default)
+- **Ask, don't just read** — chat over the whole document or a single page for summaries and questions. It remembers the last four exchanges, so follow-up questions ("explain that in more detail") work; older turns are forgotten automatically and "Reset conversation" starts over from the translated document. Citation markers in the answer jump to the sentence it came from, so you can check what it based the answer on. Optional web search for background knowledge (off by default)
 
 ## Reviewing manuscripts
 

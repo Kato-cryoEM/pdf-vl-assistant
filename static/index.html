@@ -508,6 +508,8 @@
     display: flex; align-items: center; justify-content: space-between;
     flex: 0 0 auto;
   }
+  .chat-head-tools { display: flex; align-items: center; gap: 8px; }
+  .chat-memory { font-size: 11px; color: var(--muted); }
   .chat-body { padding: 6px 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
   .chat-body.collapsed { display: none; }
   .chat-messages {
@@ -676,7 +678,11 @@
   <section id="chatSection" class="chat-section">
     <div class="chat-head">
       <span>💬 質問チャット (このページの内容に基づいて回答)</span>
-      <button id="chatToggle" class="ghost">折り畳み</button>
+      <span class="chat-head-tools">
+        <span id="chatMemory" class="chat-memory" title="直前の会話を踏まえて答えます。古い分は自動で忘れます">会話の記憶 0/4</span>
+        <button id="chatReset" class="ghost" title="会話の記憶を消して、翻訳した直後の状態から質問します">🔄 会話をリセット</button>
+        <button id="chatToggle" class="ghost">折り畳み</button>
+      </span>
     </div>
     <div class="chat-body" id="chatBody">
       <div class="chat-messages" id="chatMessages"></div>
@@ -853,6 +859,8 @@ const els = {
   chatSection: $('chatSection'),
   chatBody: $('chatBody'),
   chatToggle: $('chatToggle'),
+  chatReset: $('chatReset'),
+  chatMemory: $('chatMemory'),
   chatMessages: $('chatMessages'),
   chatInput: $('chatInput'),
   chatSend: $('chatSend'),
@@ -910,6 +918,11 @@ const els = {
   figGalleryView: $('figGalleryView'),
   modalImg: $('modalImg'),
 };
+
+// 会話の記憶: 直近 CHAT_MEMORY_TURNS 往復を質問のたびに送り、前の会話を踏まえて答えてもらう。
+// 古い分は自動で忘れる (サーバー側でも同じ上限で切る)。リセットで翻訳直後の状態に戻る。
+const CHAT_MEMORY_TURNS = 4;
+let chatHistory = [];   // [{role: 'user'|'assistant', content}] 古い順
 
 // アプリ状態
 let currentJobId = null;
@@ -1050,12 +1063,14 @@ async function loadLanguages() {
     }
     applyI18n(els.lang.value);
     setJaPaneTitle(els.lang.value);
+    updateChatMemory();
   } catch (e) { console.warn('loadLanguages failed', e); }
 }
 els.lang.addEventListener('change', () => {
   try { localStorage.setItem('pdfvl.lang', els.lang.value); } catch (e) {}
   applyI18n(els.lang.value);          // 画面の文字も選んだ言語に合わせる
   setJaPaneTitle(els.lang.value);
+  updateChatMemory();
 });
 // 訳文ペインの見出しを、その文書を訳した言語に合わせる
 function setJaPaneTitle(code) {
@@ -1953,6 +1968,18 @@ els.chatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); els.chatSend.click(); }
 });
 
+
+function updateChatMemory() {
+  if (!els.chatMemory) return;
+  const turns = Math.min(chatHistory.length / 2, CHAT_MEMORY_TURNS);
+  els.chatMemory.textContent = `${t('会話の記憶')} ${turns}/${CHAT_MEMORY_TURNS}`;
+}
+
+els.chatReset.addEventListener('click', () => {
+  clearChat();
+  flash(t('会話をリセットしました'));
+});
+
 els.chatSend.addEventListener('click', async () => {
   const msg = els.chatInput.value.trim();
   if (!msg) return;
@@ -1970,6 +1997,7 @@ els.chatSend.addEventListener('click', async () => {
         page: currentPageNo,
         scope: els.chatScope.value,
         web: els.chatWeb.checked,
+        history: chatHistory.slice(-CHAT_MEMORY_TURNS * 2),
       }),
     });
     if (r.status === 404) {
@@ -2010,6 +2038,12 @@ els.chatSend.addEventListener('click', async () => {
     if (!acc) asstBody.textContent = t('(空応答)');
     // 引用マーカー [P<n>S<i>] を解析 → ソース文をハイライト
     highlightChatCitations(acc, asstBody, webSources);
+    // 答えが返った往復だけ記憶する (エラー・空応答は覚えない)
+    if (acc.trim()) {
+      chatHistory.push({role: 'user', content: msg}, {role: 'assistant', content: acc});
+      chatHistory = chatHistory.slice(-CHAT_MEMORY_TURNS * 2);
+      updateChatMemory();
+    }
   } catch (e) {
     asstBody.textContent = 'エラー: ' + e;
   } finally { els.chatSend.disabled = false; }
@@ -2107,6 +2141,8 @@ function clearChat() {
   if (!els.chatMessages) return;
   els.chatMessages.innerHTML = '';
   els.chatInput.value = '';
+  chatHistory = [];
+  updateChatMemory();
   currentCitedIndices.clear();
   document.querySelectorAll('.ja-sent.cited').forEach(el => el.classList.remove('cited'));
 }

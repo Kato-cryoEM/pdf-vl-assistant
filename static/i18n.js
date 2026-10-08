@@ -64,6 +64,11 @@ const I18N = {
   '🌐 Web検索も使う':     {en: '🌐 Also search the web', zh: '🌐 同时使用网络搜索', ko: '🌐 웹 검색도 사용', de: '🌐 Auch im Web suchen', fr: '🌐 Chercher aussi sur le web', es: '🌐 Buscar también en la web'},
   '送信':                 {en: 'Send', zh: '发送', ko: '보내기', de: 'Senden', fr: 'Envoyer', es: 'Enviar'},
   'このページの内容について質問...': {en: 'Ask about this document…', zh: '就本文档内容提问…', ko: '이 문서 내용에 대해 질문…', de: 'Frage zum Dokument …', fr: 'Posez une question sur le document…', es: 'Pregunta sobre el documento…'},
+  '会話の記憶':           {en: 'Memory', zh: '对话记忆', ko: '대화 기억', de: 'Gedächtnis', fr: 'Mémoire', es: 'Memoria'},
+  '🔄 会話をリセット':    {en: '🔄 Reset conversation', zh: '🔄 重置对话', ko: '🔄 대화 초기화', de: '🔄 Gespräch zurücksetzen', fr: '🔄 Réinitialiser la conversation', es: '🔄 Reiniciar conversación'},
+  '会話をリセットしました': {en: 'Conversation reset', zh: '已重置对话', ko: '대화를 초기화했습니다', de: 'Gespräch zurückgesetzt', fr: 'Conversation réinitialisée', es: 'Conversación reiniciada'},
+  '直前の会話を踏まえて答えます。古い分は自動で忘れます': {en: 'Answers take the recent conversation into account; older turns are forgotten automatically', zh: '回答会参考最近的对话，较早的内容会自动遗忘', ko: '최근 대화를 바탕으로 답합니다. 오래된 내용은 자동으로 잊습니다', de: 'Antworten berücksichtigen das letzte Gespräch; ältere Runden werden automatisch vergessen', fr: 'Les réponses tiennent compte de la conversation récente ; les anciens échanges sont oubliés automatiquement', es: 'Las respuestas tienen en cuenta la conversación reciente; los turnos antiguos se olvidan automáticamente'},
+  '会話の記憶を消して、翻訳した直後の状態から質問します': {en: 'Forget the conversation and ask from the state right after translation', zh: '清除对话记忆，从刚翻译完的状态重新提问', ko: '대화 기억을 지우고 번역 직후 상태에서 질문합니다', de: 'Gespräch vergessen und wieder vom Stand direkt nach der Übersetzung fragen', fr: 'Oublier la conversation et repartir de l’état juste après la traduction', es: 'Olvidar la conversación y preguntar desde el estado justo después de la traducción'},
 
   // --- 右クリックメニュー ---
   '🔄 再翻訳':            {en: '🔄 Retranslate', zh: '🔄 重新翻译', ko: '🔄 재번역', de: '🔄 Neu übersetzen', fr: '🔄 Retraduire', es: '🔄 Retraducir'},

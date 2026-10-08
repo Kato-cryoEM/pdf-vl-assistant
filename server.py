@@ -3675,6 +3675,39 @@ class _ChatBody(BaseModel):
     page: int | None = None
     scope: str = "page"  # "page" or "all"
     web: bool = False  # if true, augment with web search results
+    # これまでの会話 [{"role": "user"|"assistant", "content": str}, ...] (古い順)。
+    # 画面側が持っていて毎回送る。空なら単発の質問として答える。
+    history: list[dict] = []
+
+
+# チャットで覚えておく会話の量。これを超えた古い分は捨てる (論文の訳文がコンテキストの大半を使うので小さく保つ)
+CHAT_HISTORY_TURNS = 4            # 直近の往復数
+CHAT_HISTORY_MAX_CHARS = 8000     # 履歴全体の文字数の上限
+CHAT_HISTORY_ANSWER_CHARS = 1500  # 1 つの回答をプロンプトに入れる時の上限
+
+
+def _chat_history_text(history: list[dict]) -> tuple[str, int]:
+    """直近の会話を、上限の範囲で新しい方から拾ってプロンプト用の文字列にする。戻り値: (文字列, 往復数)。"""
+    pairs: list[tuple[str, str]] = []
+    q = None
+    for m in history or []:
+        role, content = m.get("role"), str(m.get("content") or "").strip()
+        if role == "user":
+            q = content
+        elif role == "assistant" and q is not None:
+            pairs.append((q, content))
+            q = None
+    picked: list[str] = []
+    used = 0
+    for q, a in reversed(pairs[-CHAT_HISTORY_TURNS:]):
+        if len(a) > CHAT_HISTORY_ANSWER_CHARS:
+            a = a[:CHAT_HISTORY_ANSWER_CHARS] + "…(以下省略)"
+        item = f"Q: {q}\nA: {a}"
+        if picked and used + len(item) > CHAT_HISTORY_MAX_CHARS:
+            break
+        picked.append(item)
+        used += len(item)
+    return "\n\n".join(reversed(picked)), len(picked)
 
 
 class _CommentBody(BaseModel):
@@ -3886,6 +3919,8 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
             web_txt = f"[Web検索失敗: {type(e).__name__}: {e}]"
             print(f"[chat web] error: {e}", flush=True)
 
+    history_txt, history_turns = _chat_history_text(body.history)
+    print(f"[chat] history: {history_turns} turns, {len(history_txt)} chars", flush=True)
     _lname = lang_info(job.get("lang", DEFAULT_LANG))["name"]
     prompt = f"""あなたは学術文書アシスタントです。以下の文書内容 (原論文の{_lname}訳) に基づいて、ユーザーの質問に{_lname}で回答してください。
 
@@ -3908,7 +3943,13 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
 {web_txt}
 
 Web検索結果を根拠として使った場合のみ末尾に `[W<n>]` を付ける。
-""" if web_txt else "") + f"""
+""" if web_txt else "") + (f"""
+## これまでの会話 (直近 {history_turns} 往復、古い順)
+{history_txt}
+
+今回の質問が前の会話を指している場合 (「それ」「さっきの」「もっと詳しく」等) は、この会話を踏まえて答える。
+回答の根拠は、これまでどおり上の文書内容から引用する。
+""" if history_txt else "") + f"""
 ## ユーザーの質問
 {body.message}
 
