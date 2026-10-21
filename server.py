@@ -3689,6 +3689,76 @@ CHAT_HISTORY_MAX_CHARS = 8000     # 履歴全体の文字数の上限
 CHAT_HISTORY_ANSWER_CHARS = 1500  # 1 つの回答をプロンプトに入れる時の上限
 
 
+# Web 検索の検索語づくり。質問をそのまま検索すると (特に日本語だと) 関係のない
+# 結果ばかり返るので、論文の原文 (英語) の用語を使った英語の検索語を LLM に作らせる。
+WEB_QUERY_PROMPT = """You write a web search query for a question about a scientific paper.
+
+Paper (title / first page, original English):
+{head}
+
+Sentences from the paper related to the question (original English, then translation):
+{related}
+{prev}
+Question (may be in any language):
+{question}
+
+Write ONE concise English web search query (about 4-10 words) that would find background
+information for this question. Use the exact technical terms, names and abbreviations as
+they appear in the paper's English text (not re-translated words). Do not include citation
+IDs, line numbers or quotes.
+
+Output JSON only: {{"query": "..."}}"""
+
+
+def _plain(t: str | None) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", t or "")).strip()
+
+
+def _question_related_blocks(job: dict, question: str, n: int = 8) -> list[dict]:
+    """質問と文字の 2-gram が多く重なる文を返す (訳文と原文の両方で数える)。
+    平仮名だけの 2-gram (「ですか」など) は数えない。"""
+    def grams(t: str) -> set[str]:
+        t = t.lower()
+        return {t[k:k + 2] for k in range(len(t) - 1)
+                if not re.fullmatch(r"[\u3040-\u309f\s\W]{2}", t[k:k + 2])}
+    q = grams(question)
+    if not q:
+        return []
+    scored = []
+    for p in job.get("pages", []):
+        for b in p.get("blocks", []):
+            src = _plain(b.get("src"))
+            if len(src) < 20:
+                continue
+            score = len(q & (grams(_plain(b.get("ja"))) | grams(src)))
+            if score:
+                scored.append((score, b))
+    scored.sort(key=lambda x: -x[0])
+    return [b for _, b in scored[:n]]
+
+
+async def _web_search_query(job: dict, question: str, history: list[dict], model: str) -> str:
+    """論文の英語の用語を使った英語の検索語を作る。失敗したら質問をそのまま使う。"""
+    pages = job.get("pages", [])
+    head = " ".join(_plain(b.get("src")) for b in (pages[0].get("blocks", []) if pages else []))[:1500]
+    related = "\n".join(f"- {_plain(b.get('src'))[:400]}\n  ({_plain(b.get('ja'))[:200]})"
+                         for b in _question_related_blocks(job, question)) or "(none)"
+    # 「それは？」のような続きの質問のために、直前の質問も渡す
+    prev_q = next((h.get("content", "") for h in reversed(history or [])
+                   if h.get("role") == "user"), "")
+    prev = f"\nPrevious question in this conversation:\n{prev_q[:300]}\n" if prev_q else ""
+    prompt = WEB_QUERY_PROMPT.format(head=head, related=related, prev=prev, question=question)
+    try:
+        raw = await llm_chat([{"role": "user", "content": prompt}], model=model, timeout=60.0,
+                             temperature=0.1, max_tokens=100, format_json=True)
+        q = re.sub(r"\s+", " ", str(json.loads(raw).get("query") or "")).strip()
+        if q:
+            return q[:200]
+    except Exception as e:
+        print(f"[chat web] query generation failed: {e}", flush=True)
+    return question
+
+
 # 査読用原稿の左余白の行番号。チャットで文の位置を行番号でも示せるように、
 # 文の rects_px と同じ高さにある行番号を元の PDF から求める (古いジョブにも効く)。
 _LINE_NO_CACHE: dict[str, tuple[int, dict]] = {}
@@ -3959,6 +4029,7 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
 
     # オプション: Web検索で背景知識を補う
     web_txt = ""
+    web_query = ""
     web_sources: list[dict] = []
     if body.web:
         try:
@@ -3967,8 +4038,11 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
                 from ddgs import DDGS
             except ImportError:
                 from duckduckgo_search import DDGS
+            web_query = await _web_search_query(job, body.message, body.history, model)
+            print(f"[chat web] query: {web_query!r}", flush=True)
             with DDGS() as ddgs:
-                results = list(ddgs.text(body.message, max_results=5))
+                results = list(await asyncio.to_thread(
+                    lambda: ddgs.text(web_query, max_results=5)))
             print(f"[chat web] DDGS returned {len(results)} results", flush=True)
             web_lines = []
             for k, r in enumerate(results, 1):
@@ -4011,6 +4085,7 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
 {web_txt}
 
 Web検索結果を根拠として使った場合のみ末尾に `[W<n>]` を付ける。
+検索結果が英語でも、回答は必ず{_lname}で書く (専門用語は文書内容の訳語に合わせる)。
 """ if web_txt else "") + (f"""
 ## これまでの会話 (直近 {history_turns} 往復、古い順)
 {history_txt}
@@ -4026,7 +4101,8 @@ Web検索結果を根拠として使った場合のみ末尾に `[W<n>]` を付�
     async def gen():
         # 先頭に Web ソースのメタデータを送出 (クライアントは [WEB_META]...[/WEB_META] を検出して抽出)
         if web_sources:
-            meta_line = "[WEB_META]" + json.dumps({"sources": web_sources}, ensure_ascii=False) + "[/WEB_META]\n"
+            meta_line = "[WEB_META]" + json.dumps({"sources": web_sources, "query": web_query},
+                                                   ensure_ascii=False) + "[/WEB_META]\n"
             yield meta_line.encode("utf-8")
         # ストリーム途中で <think>...</think> が現れた場合は除去する
         # (thinking 無効化が効かず考察が本文に混ざるケースへの保険)

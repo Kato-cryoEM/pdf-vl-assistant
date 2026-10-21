@@ -2097,6 +2097,7 @@ els.chatSend.addEventListener('click', async () => {
           try {
             const meta = JSON.parse(acc.slice(10, end));
             webSources = meta.sources || [];
+            webSources.query = meta.query || '';
           } catch (e) { console.warn('web meta parse fail', e); }
           acc = acc.slice(end + '[/WEB_META]'.length).replace(/^\n/, '');
           metaExtracted = true;
@@ -2125,6 +2126,10 @@ els.chatSend.addEventListener('click', async () => {
 let currentCitedIndices = new Set(); // "P{n}S{i}" のセット
 function highlightChatCitations(answer, msgBodyEl, webSources) {
   webSources = webSources || [];
+  // [P1S8, P1S10] のように 1 つの括弧にまとめて返すことがあるので [P1S8][P1S10] にほどく
+  const ID = 'P\\d+S\\d+(?::L\\d+(?:-\\d+)?)?';
+  answer = answer.replace(new RegExp(`\\[(${ID}(?:\\s*[,、;，]\\s*${ID})+)\\]`, 'g'),
+    (m0, inner) => inner.split(/\s*[,、;，]\s*/).map(x => `[${x}]`).join(''));
   const webMap = new Map();
   webSources.forEach(s => webMap.set(s.n, s));
   // 既存ハイライトをクリア
@@ -2171,11 +2176,14 @@ function highlightChatCitations(answer, msgBodyEl, webSources) {
   });
   msgBodyEl.innerHTML = html;
 
-  // ソース欄を末尾に追加 (使われた Web ソースのみ)
-  if (webSources.length && usedWebN.size) {
+  // ソース欄を末尾に追加 (使われた Web ソースのみ)。検索語は使われなくても出す
+  if (webSources.length) {
     const srcDiv = document.createElement('div');
     srcDiv.className = 'web-sources';
-    let srcHtml = '<div class="web-sources-title">🌐 Web検索ソース</div><ol>';
+    let srcHtml = '<div class="web-sources-title">🌐 ' + esc(t('Web検索ソース')) + '</div>';
+    if (webSources.query) srcHtml += `<div class="web-snippet">${esc(t('検索語'))}: ${esc(webSources.query)}</div>`;
+    if (!usedWebN.size) srcHtml += `<div class="web-snippet">${esc(t('(回答には使われませんでした)'))}</div>`;
+    srcHtml += '<ol>';
     webSources.forEach(s => {
       if (!usedWebN.has(s.n)) return;
       srcHtml += `<li>[W${s.n}] <a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a><div class="web-snippet">${esc((s.snippet||'').slice(0, 200))}</div></li>`;
