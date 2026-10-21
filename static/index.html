@@ -541,16 +541,32 @@
     .split { grid-template-columns: 1fr; height: auto; }
     .pane { max-height: 70vh; }
   }
+
+  /* 閲覧モード (viewer.py): LLM が要る部品を隠し、読み込み用の部品を出す */
+  .only-viewer { display: none !important; }
+  body.viewer .only-viewer { display: revert !important; }
+  body.viewer .only-main,
+  body.viewer #uploader, body.viewer #suppBtn, body.viewer #llmBtn, body.viewer #chatSection,
+  body.viewer #ctxMenu [data-action="retranslate"], body.viewer #ctxMenu [data-action="merge-prev"],
+  body.viewer #ctxMenu [data-action="merge-next"], body.viewer #ctxMenu [data-action="split"] { display: none !important; }
+  .viewer-badge { font-size: 11px; color: var(--accent2); border: 1px solid var(--accent2); border-radius: 4px; padding: 1px 6px; }
+  .viewer-hint { padding: 14px 16px; font-size: 13px; color: var(--muted); line-height: 1.7; }
+  body.viewer #viewerHint.dismissed { display: none !important; }
+  body.viewer.dragging main { outline: 2px dashed var(--accent2); outline-offset: -6px; }
 </style>
 </head>
 <body>
 <header>
   <h1>PDF VL Assistant</h1>
+  <span class="viewer-badge only-viewer" title="LLM を使わずに、解析済みの文書を読むモードです">閲覧モード</span>
   <label style="font-size:12px;color:var(--muted)">📂 保存ジョブ
     <select id="savedJobs" style="font-size:12px;max-width:280px"></select>
   </label>
   <button id="loadJobBtn" class="ghost" style="font-size:12px">読込</button>
   <button id="deleteJobBtn" class="ghost" style="font-size:12px;color:var(--danger)">削除</button>
+  <button id="exportJobBtn" class="ghost only-main" style="font-size:12px" title="選んだ文書の解析結果を zip で書き出す (LLM の無い PC の閲覧版で読めます)">📦 書き出し</button>
+  <input type="file" id="importFile" accept=".zip,application/zip" style="display:none">
+  <button id="importJobBtn" class="ghost only-viewer" style="font-size:12px" title="書き出した解析結果 (.pdfvl.zip) を取り込む">📥 読み込み</button>
   <button id="showComments" class="ghost" style="font-size:12px">💬 コメント一覧</button>
   <input type="file" id="suppFile" accept="application/pdf" style="display:none">
   <button id="suppBtn" class="ghost" style="font-size:12px" title="サプリメンタル PDF を追加解析">📎 サプリ追加</button>
@@ -581,6 +597,11 @@
 </div>
 
 <main>
+  <div class="section viewer-hint only-viewer" id="viewerHint">
+    <div>解析済みの文書を読むための閲覧モードです（解析・再翻訳・チャットは本体の PDF VL Assistant で行います）。</div>
+    <div>本体の「📦 書き出し」で作った .pdfvl.zip を「📥 読み込み」で取り込むか、この画面にドラッグ&amp;ドロップしてください。</div>
+    <div>取り込んだ文書は「📂 保存ジョブ」から選んで「読込」で開けます。</div>
+  </div>
   <div class="section uploader" id="uploader">
     <div class="row">
       <input type="file" id="file" accept="application/pdf">
@@ -808,6 +829,9 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+// 閲覧版 (viewer.py) で開いた時は LLM が要る部品を隠す (CSS の body.viewer)
+const VIEWER = !!window.PDFVL_VIEWER;
+if (VIEWER) document.body.classList.add('viewer');
 const els = {
   status: $('status'),
   uploader: $('uploader'),
@@ -885,6 +909,10 @@ const els = {
   savedJobs: $('savedJobs'),
   loadJobBtn: $('loadJobBtn'),
   deleteJobBtn: $('deleteJobBtn'),
+  exportJobBtn: $('exportJobBtn'),
+  importJobBtn: $('importJobBtn'),
+  importFile: $('importFile'),
+  viewerHint: $('viewerHint'),
   commentsList: $('commentsList'),
   closeCommentsList: $('closeCommentsList'),
   commentsBody: $('commentsBody'),
@@ -991,6 +1019,7 @@ async function loadSavedJob(jobId, opts={}) {
     if (isRunning) subscribe(jobId);
     else closeStream();
     els.savedJobs.value = jobId;
+    if (els.viewerHint) els.viewerHint.classList.add('dismissed');
     flash(isRunning ? `ジョブ ${jobId} を読込 (解析中・自動更新)` : `ジョブ ${jobId} を読込`);
   } catch (e) {
     flash('ジョブ読込失敗: ' + e, true);
@@ -1017,6 +1046,49 @@ els.deleteJobBtn.addEventListener('click', async () => {
 
 async function tryResumeJob() {
   await refreshSavedJobs(true);
+  // URL の #job=<ID> で、その文書を直接開く (ブックマーク用)
+  const m = location.hash.match(/job=([A-Za-z0-9_-]+)/);
+  if (m && m[1] !== currentJobId) await loadSavedJob(m[1]);
+}
+
+// -------- 書き出し (本体) / 読み込み (閲覧版) --------
+// 書き出した zip は、LLM の無い PC でも閲覧版 (viewer.py) で読める
+els.exportJobBtn.addEventListener('click', () => {
+  const id = els.savedJobs.value || currentJobId;
+  if (!id) { flash(t('書き出す文書を「保存ジョブ」から選んでください'), true); return; }
+  window.location.href = `/api/job/${id}/export`;
+  flash(t('書き出しています…'));
+});
+
+async function importZip(file) {
+  if (!file) return;
+  if (!/\.zip$/i.test(file.name)) { flash(t('.pdfvl.zip を選んでください'), true); return; }
+  els.status.textContent = `${t('読み込み中')}: ${file.name}`;
+  try {
+    const r = await fetch('/api/import', {method: 'POST', headers: {'Content-Type': 'application/zip'}, body: file});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    flash(`${t('読み込みました')}: ${j.filename || j.job_id}`);
+    await refreshSavedJobs();
+    await loadSavedJob(j.job_id);
+  } catch (e) {
+    flash(t('読み込み失敗') + ': ' + (e.message || e), true);
+  } finally {
+    els.status.textContent = t('準備完了');
+    els.importFile.value = '';
+  }
+}
+els.importJobBtn.addEventListener('click', () => els.importFile.click());
+els.importFile.addEventListener('change', () => importZip(els.importFile.files[0]));
+if (VIEWER) {
+  // 閲覧版では画面のどこに落としても zip を取り込む
+  ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => {
+    if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); document.body.classList.add('dragging'); }
+  }));
+  ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => {
+    e.preventDefault(); document.body.classList.remove('dragging');
+  }));
+  document.addEventListener('drop', e => importZip(e.dataTransfer.files[0]));
 }
 
 async function loadModels() {
@@ -1044,7 +1116,7 @@ async function loadModels() {
     }
   } catch (e) { els.status.textContent = 'モデル一覧取得失敗: ' + e; }
 }
-loadModels();
+if (!VIEWER) loadModels();
 
 // -------- 訳す言語 --------
 let langNames = {};
@@ -2060,7 +2132,8 @@ function highlightChatCitations(answer, msgBodyEl, webSources) {
   currentCitedIndices.clear();
 
   // 引用マーカー抽出: [P1S3][P2S5] や [W1] を検出
-  const re = /\[(P(\d+)S(\d+)|W(\d+))\]/g;
+  // 行番号付きの原稿では [P12S16:L345-347] の形で返る
+  const re = /\[(P(\d+)S(\d+)(?::L\d+(?:-\d+)?)?|W(\d+))\]/g;
   const pageCitations = new Map(); // page -> Set of i
   const usedWebN = new Set();
   let m;
@@ -2080,8 +2153,11 @@ function highlightChatCitations(answer, msgBodyEl, webSources) {
   const esc = (s) => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
   // メッセージ本文の [P1S3] / [W1] をクリック可能・ツールチップ付きに
-  let html = answer.replace(/\[(P(\d+)S(\d+))\]/g,
-    '<a class="cite-link" data-page="$2" data-i="$3" href="#">[$1]</a>');
+  // 行番号があれば原稿の行番号で表示し、ページと文番号はツールチップに出す
+  let html = answer.replace(/\[P(\d+)S(\d+)(?::L(\d+)(?:-(\d+))?)?\]/g, (m0, pg, i, l0, l1) => {
+    const label = l0 ? (l1 && l1 !== l0 ? `L${l0}–${l1}` : `L${l0}`) : `P${pg}S${i}`;
+    return `<a class="cite-link" data-page="${pg}" data-i="${i}" href="#" title="P${pg} S${i}">[${label}]</a>`;
+  });
   html = html.replace(/\[(W(\d+))\]/g, (m0, all, num) => {
     const n = parseInt(num);
     const src = webMap.get(n);

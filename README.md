@@ -142,6 +142,20 @@ Add a supplementary PDF with "📎 サプリ追加" once the main document has b
 
 Both are gitignored.
 
+## Reading on a PC without an LLM (viewer)
+
+The results don't need the LLM, so you can read them on another PC (a laptop, a Windows or Mac machine) with `viewer.py`. It shows the same screen in a read-only **viewer mode**: side-by-side translation, figures, and comments (you can add and edit comments too). Analysis, retranslation, chat and model management are hidden.
+
+1. On the PC that runs PDF VL Assistant, open a document and press **📦 Export**. You get a `<name>-<id>.pdfvl.zip` with everything (page images, translation, figures, comments, the original PDF).
+2. On the other PC, get this repository (`git clone` or the zip from GitHub) and run, with plain Python 3.9+ and nothing to install:
+   ```
+   python viewer.py
+   ```
+   The browser opens `http://127.0.0.1:8095`.
+3. Press **📥 Import** (or drop the `.pdfvl.zip` onto the page), then pick the document under **📂 Saved jobs** and press **Load**.
+
+Copying a `jobs/<id>/` folder into the viewer's `jobs/` works as well. Options: `--data DIR` (where the data lives, default `jobs/`), `--host 0.0.0.0` (let other devices read too), `--port`, `--no-browser`. `http://…/#job=<id>` opens a document directly.
+
 ## How it works
 
 1. PyMuPDF extracts text, coordinates and font attributes page by page

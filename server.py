@@ -5,8 +5,10 @@ import json
 import os
 import re
 import statistics
+import tempfile
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -14,10 +16,11 @@ import fitz  # PyMuPDF
 import httpx
 import pysbd
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 import llm_manager
 
@@ -3686,6 +3689,60 @@ CHAT_HISTORY_MAX_CHARS = 8000     # 履歴全体の文字数の上限
 CHAT_HISTORY_ANSWER_CHARS = 1500  # 1 つの回答をプロンプトに入れる時の上限
 
 
+# 査読用原稿の左余白の行番号。チャットで文の位置を行番号でも示せるように、
+# 文の rects_px と同じ高さにある行番号を元の PDF から求める (古いジョブにも効く)。
+_LINE_NO_CACHE: dict[str, tuple[int, dict]] = {}
+
+
+def _page_margin_line_numbers(page: fitz.Page) -> list[tuple[float, float, int]]:
+    """ページ左余白の行番号を [(y0, y1, 番号)] で返す。行番号が無ければ空。"""
+    blocks = page.get_text("dict").get("blocks", [])
+    body_left_x = _compute_page_left_margin(blocks)
+    out = []
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            if _is_line_number(line, body_left_x):
+                lb = line["bbox"]
+                txt = "".join((s.get("text") or "") for s in line.get("spans", []))
+                out.append((lb[1], lb[3], int(txt.strip())))
+    # 迷い込んだ数字 (表の値など) を行番号と取り違えないよう、ある程度並んでいる時だけ使う
+    return out if len(out) >= 5 else []
+
+
+def _job_line_numbers(job_id: str, job: dict) -> dict[tuple[int, int], tuple[int, int]]:
+    """{(page_no, i): (最初の行番号, 最後の行番号)}。行番号の無い PDF では空。"""
+    pdf = JOBS_DIR / job_id / "input.pdf"
+    # 文の結合・分割で位置が変わった時だけ求め直す (コメント保存などでは変わらない)
+    sig = hash(tuple((p.get("page_no"), b.get("i"), str(b.get("rects_px")))
+                     for p in job.get("pages", []) for b in p.get("blocks", [])))
+    cached = _LINE_NO_CACHE.get(job_id)
+    if cached and cached[0] == sig:
+        return cached[1]
+    result: dict[tuple[int, int], tuple[int, int]] = {}
+    if pdf.exists():
+        zoom = PAGE_RENDER_DPI / 72.0
+        with fitz.open(pdf) as doc:
+            for p in job.get("pages", []):
+                idx = p.get("page_no", 0) - 1
+                if not (0 <= idx < len(doc)):
+                    continue
+                nums = _page_margin_line_numbers(doc[idx])
+                if not nums:
+                    continue
+                for b in p.get("blocks", []):
+                    hit = []
+                    for r in b.get("rects_px") or []:
+                        y0, y1 = r[1] / zoom, r[3] / zoom
+                        # 行番号の縦中央が文の行の範囲に入っていれば、その行とみなす
+                        hit += [n for (ny0, ny1, n) in nums if y0 - 1 <= (ny0 + ny1) / 2 <= y1 + 1]
+                    if hit:
+                        result[(p["page_no"], b.get("i"))] = (min(hit), max(hit))
+    _LINE_NO_CACHE[job_id] = (sig, result)
+    return result
+
+
 def _chat_history_text(history: list[dict]) -> tuple[str, int]:
     """直近の会話を、上限の範囲で新しい方から拾ってプロンプト用の文字列にする。戻り値: (文字列, 往復数)。"""
     pairs: list[tuple[str, str]] = []
@@ -3869,8 +3926,13 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
         target_pages = job.get("pages", [])
     else:
         target_pages = job.get("pages", [])[max(0, body.page - 1):body.page]
+    try:
+        line_nos = await asyncio.to_thread(_job_line_numbers, job_id, job)
+    except Exception as e:
+        print(f"[chat] line numbers failed: {e}", flush=True)
+        line_nos = {}
     for p in target_pages:
-        # 各文にインデックス付きで出す
+        # 各文にインデックス付きで出す。原稿に行番号があれば ID に添える ([P12S16:L345-347])
         items = []
         for b in p.get("blocks", []):
             i = b.get("i")
@@ -3878,7 +3940,11 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
             src = re.sub(r"<[^>]+>", "", (b.get("src") or "")).strip()
             text = ja or src
             if text:
-                items.append(f"[P{p['page_no']}S{i}] {text}")
+                ln = line_nos.get((p["page_no"], i))
+                tag = f"P{p['page_no']}S{i}"
+                if ln:
+                    tag += f":L{ln[0]}" if ln[0] == ln[1] else f":L{ln[0]}-{ln[1]}"
+                items.append(f"[{tag}] {text}")
         if items:
             ctx_parts.append("\n".join(items))
     context_txt = "\n\n".join(ctx_parts)
@@ -3934,7 +4000,9 @@ async def chat_endpoint(job_id: str, body: _ChatBody):
 ## 引用ルール (必ず守る)
 - 各主張・段落の末尾に根拠となった文の ID を `[P<page>S<i>]` 形式で列挙。
 - 引用 ID は下の文書内容の [P<page>S<i>] タグと一致させること。存在しない ID を作らない。
-- 該当する根拠が文書中にない場合は引用を省く。
+""" + ("""- 文書内容のタグに行番号が付いている場合 (`[P<page>S<i>:L<行>]` や `[P<page>S<i>:L<行>-<行>]`) は、引用もタグ全体をそのまま写す。
+- ユーザーが「〇行目」「L123」のように行番号で尋ねたら、その行番号を含むタグの文を指している。
+""" if line_nos else "") + f"""- 該当する根拠が文書中にない場合は引用を省く。
 
 ## 文書内容 (各文に ID が付いている)
 {context_txt}
@@ -4057,6 +4125,30 @@ async def get_job(job_id: str):
         raise HTTPException(404, "job not found")
     j = JOBS[job_id]
     return JSONResponse({k: v for k, v in j.items() if k not in _RUNTIME_KEYS})
+
+
+@app.get("/api/job/{job_id}/export")
+async def export_job(job_id: str):
+    """解析結果 (jobs/<id>/ の中身一式) を zip で書き出す。閲覧版 (viewer.py) の「読み込み」で開ける。"""
+    if job_id not in JOBS:
+        raise HTTPException(404, "job not found")
+    _save_job_state(job_id)  # 最新のコメント等を書き出しに含める
+    src = JOBS_DIR / job_id
+    fd, tmp = tempfile.mkstemp(prefix=f"export-{job_id}-", suffix=".zip")
+    os.close(fd)
+
+    def _build():
+        # 画像・PDF は圧縮しても縮まないので、そのまま入れて書き出しを速くする
+        with zipfile.ZipFile(tmp, "w") as zf:
+            for p in sorted(src.rglob("*")):
+                if p.is_file():
+                    packed = p.suffix.lower() in (".json", ".txt", ".html", ".svg")
+                    zf.write(p, f"{job_id}/{p.relative_to(src).as_posix()}",
+                             compress_type=zipfile.ZIP_DEFLATED if packed else zipfile.ZIP_STORED)
+    await asyncio.to_thread(_build)
+    stem = re.sub(r"[\\/:*?\"<>|]+", "_", Path(JOBS[job_id].get("filename") or job_id).stem)
+    return FileResponse(tmp, media_type="application/zip", filename=f"{stem}-{job_id}.pdfvl.zip",
+                        background=BackgroundTask(os.unlink, tmp))
 
 
 @app.get("/api/job/{job_id}/stream")
