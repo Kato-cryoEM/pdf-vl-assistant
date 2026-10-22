@@ -1372,16 +1372,15 @@ function renderJaPanel(p) {
   const groups = [];
   let curPid = null, curLabel = null, curArr = null;
   let refBucket = null;  // 現在集約中の reference エントリ (label==references)
-  const refStartRe = /^\s*(\d+)\.\s/;
   for (const b of blocks) {
     const pid = (b.p != null) ? b.p : b.i;
     const lbl = b.label || 'body';
     if (lbl === 'references') {
-      const srcPlain = (b.src || '').replace(/<[^>]+>/g, '');
-      const m = srcPlain.match(refStartRe);
-      if (m) {
+      const num = refEntryNum(b);
+      // 番号で始まる文か、段落 (p) が変わったところで新しいエントリにする
+      if (num || (refBucket && refBucket.p !== pid)) {
         // 新しい参考文献エントリの開始
-        refBucket = { pid: b.i, sents: [b], label: 'references', refNum: m[1] };
+        refBucket = { pid: b.i, p: pid, sents: [b], label: 'references', refNum: num };
         groups.push(refBucket);
         curPid = b.i; curLabel = 'references';
       } else if (refBucket) {
@@ -1389,7 +1388,7 @@ function renderJaPanel(p) {
         refBucket.sents.push(b);
       } else {
         // 先頭が数字始まりでない孤立ブロック — 単独グループ
-        refBucket = { pid: b.i, sents: [b], label: 'references', refNum: null };
+        refBucket = { pid: b.i, p: pid, sents: [b], label: 'references', refNum: null };
         groups.push(refBucket);
         curPid = b.i; curLabel = 'references';
       }
@@ -2278,31 +2277,33 @@ function wrapCitations(html) {
   });
 }
 
-// 参考文献 map を作成 (現在ページ + 全ページを対象)
+// 参考文献エントリの番号。"12. Smith ..." のほか、番号だけが別の文になった "12." や
+// "[12]" の形も拾う。巻号 ("<b>12</b>, 6316") は数字の後が "." でないので拾わない。
+function refEntryNum(b) {
+  const t = (b.src || '').replace(/<[^>]+>/g, '');
+  const m = t.match(/^\s*(\d{1,4})\.(?:\s|$)/) || t.match(/^\s*\[(\d{1,4})\]/);
+  return m ? m[1] : null;
+}
+
+// 参考文献 map を作成 (全ページ)。番号の文から次の番号の文の直前までを 1 件とし、
+// ページをまたいで続く場合もつなぐ
 function buildRefMap() {
   const map = new Map();
+  let cur = null;
   for (const p of pagesData) {
     for (const b of (p.blocks || [])) {
-      if (b.label !== 'references') continue;
-      const srcPlain = (b.src || '').replace(/<[^>]+>/g, '');
-      const m = srcPlain.match(/^\s*(\d+)\.\s+/);
-      if (m) {
-        const num = m[1];
-        // 番号ヘッダから、次に続く数字ヘッダの直前までを結合
-        let combined = srcPlain;
-        // 同ページ内で連続 references ブロックを結合
-        const idx = p.blocks.indexOf(b);
-        for (let k = idx + 1; k < p.blocks.length; k++) {
-          const nb = p.blocks[k];
-          if (nb.label !== 'references') break;
-          const ns = (nb.src || '').replace(/<[^>]+>/g, '');
-          if (/^\s*\d+\.\s+/.test(ns)) break;
-          combined += ' ' + ns;
-        }
-        map.set(num, combined.replace(/\s+/g, ' ').trim());
+      if (b.label !== 'references') { cur = null; continue; }
+      const text = (b.src || '').replace(/<[^>]+>/g, '');
+      const num = refEntryNum(b);
+      if (num) {
+        cur = num;
+        map.set(num, text);
+      } else if (cur) {
+        map.set(cur, map.get(cur) + ' ' + text);
       }
     }
   }
+  for (const [k, v] of map) map.set(k, v.replace(/\s+/g, ' ').trim());
   return map;
 }
 
@@ -2315,6 +2316,55 @@ document.addEventListener('click', (e) => {
   showRefPopup(num, e.clientX, e.clientY);
 });
 
+// 文献検索用の文字の正規化。合字 (ﬁ) を戻し、一部の PDF で "ti" が "J" に化けている
+// 単語 (secreJon, funcJonal) を直す
+function cleanRefText(t) {
+  return t.replace(/ﬁ/g, 'fi').replace(/ﬂ/g, 'fl').replace(/ﬀ/g, 'ff').replace(/ﬃ/g, 'ffi').replace(/ﬄ/g, 'ffl')
+          .replace(/([a-z])J(?=[a-z\-])/g, '$1ti')
+          // 同じ種類の PDF で "tt" が ">"、"ft" が "]" に化けていることもある (Li>le, so]ware)
+          .replace(/([a-z])>(?=[a-z])/g, '$1tt').replace(/([a-z])\](?=[a-z])/g, '$1ft')
+          .replace(/\s+/g, ' ').trim();
+}
+
+// 参考文献 1 件から著者・年・タイトルを取り出す。
+// "Low, H. H. Title. Journal 12, 1-9 (2021)." (Nature 型) と
+// "Smith J, Doe A (2020) Title. Journal 12: 1-9" (年が著者の直後) の両方を扱う。
+function parseReference(text) {
+  let t = cleanRefText(text).replace(/^\s*(?:\d{1,4}\.|\[\d{1,4}\])\s*/, '');
+  const firstAuthor = (t.match(/^([A-Z][A-Za-z'’\-\u00C0-\u024F]+(?: [a-z]{1,3})?(?: [A-Z][A-Za-z'’\-\u00C0-\u024F]+)?)/) || [])[1] || '';
+  const yearM = t.match(/\((\d{4})[a-z]?\)/) || t.match(/\b(19|20)\d{2}\b/);
+  const year = yearM ? (yearM[1].length === 4 ? yearM[1] : yearM[0]) : '';
+  let titleStart = -1;
+  // 年が著者の直後 (先頭 40% 以内) にある形式: その後ろがタイトル
+  const early = t.match(/^(.{3,}?)\((\d{4})[a-z]?\)[.,:]?\s+/);
+  if (early && early[0].length < t.length * 0.4) titleStart = early[0].length;
+  if (titleStart < 0) {
+    // 著者列はイニシャル ("H." "Ch.") か "et al." で終わる。続きがまだ名前でなければそこからタイトル
+    const re = /(?:\bet al\.|\b[A-Z][a-z]?\.)\s+/g;
+    let m;
+    while ((m = re.exec(t)) !== null) {
+      const rest = t.slice(m.index + m[0].length);
+      if (/^(?:[A-Z][a-z]?\.|[A-Z][a-z]?-[A-Z]\.|&|and\b|et al)/.test(rest)) continue;  // まだイニシャル・著者が続く
+      if (/^[A-Z][A-Za-z'’\-\u00C0-\u024F]+,\s*[A-Z]\./.test(rest)) continue;          // 次の著者 "Smith, J."
+      titleStart = m.index + m[0].length;
+      break;
+    }
+  }
+  let title = '';
+  if (titleStart >= 0) {
+    const rest = t.slice(titleStart);
+    // タイトルは次の ". " / "? " / "! " まで。短すぎる時 (種名の略 "T. thermophilus" で切れた等) は次まで延ばす
+    const ends = [...rest.matchAll(/[.?!](?=\s+\S|\s*$)/g)].map(x => x.index);
+    for (const e of ends) {
+      if (e >= 12 && !/\b(?:[A-Z]|e\.g|i\.e|vs|al)$/.test(rest.slice(0, e))) { title = rest.slice(0, e + (rest[e] === '.' ? 0 : 1)); break; }
+    }
+    if (!title && ends.length) title = rest.slice(0, ends[0]);
+  }
+  title = title.trim();
+  if (title.length < 10 || title.length > 300) title = '';
+  return {title, firstAuthor, year, clean: t};
+}
+
 function showRefPopup(num, mx, my) {
   const refMap = buildRefMap();
   const text = refMap.get(String(num));
@@ -2326,19 +2376,23 @@ function showRefPopup(num, mx, my) {
     searchArea.innerHTML = '';
   } else {
     body.textContent = text;
-    // タイトル抽出: 数字と著者名を除去して残りを検索クエリに
-    // 一般形式: "1. Authors. Title. Journal Vol, pages (Year)."
-    let q = text.replace(/^\s*\d+\.\s+/, '');
-    // DOI があれば直接開く
-    const doiM = q.match(/10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+/);
-    const doi = doiM ? doiM[0] : null;
-    // タイトル部だけを抜き出そうと試みる: 著者列 (最初の . まで) と Journal (最後の . 前) を除外
-    // 簡略化: 全文で検索
-    const qEnc = encodeURIComponent(q.slice(0, 300));
+    // 全文で検索すると巻号・ページ・著者全員が入って当たらないので、
+    // タイトル + 筆頭著者の姓で検索する。タイトルが取れなければ巻号などを除いた全文
+    const ref = parseReference(text);
+    const doiM = text.match(/10\.\d{4,9}\/[-._;()/:A-Za-z0-9]+/);
+    const doi = doiM ? doiM[0].replace(/[.)]+$/, '') : null;
+    const surname = (ref.firstAuthor.match(/([A-Za-z'’\-\u00C0-\u024F]+)$/) || [])[1] || '';
+    const q = ref.title
+      ? (surname ? `${ref.title} ${surname}` : ref.title)
+      : ref.clean.replace(/https?:\S+|doi:\S+/gi, '').replace(/\b\d+[\s,:;–\-()]*/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const qEnc = encodeURIComponent(q);
+    const titleEnc = encodeURIComponent(ref.title || q);
     const buttons = [];
     buttons.push(`<a class="ref-search-btn" href="https://scholar.google.com/scholar?q=${qEnc}" target="_blank" rel="noopener noreferrer">Google Scholar で検索</a>`);
-    buttons.push(`<a class="ref-search-btn" href="https://pubmed.ncbi.nlm.nih.gov/?term=${qEnc}" target="_blank" rel="noopener noreferrer">PubMed</a>`);
+    // PubMed は語を全部 AND で探すので、タイトルだけの方が当たりやすい
+    buttons.push(`<a class="ref-search-btn" href="https://pubmed.ncbi.nlm.nih.gov/?term=${titleEnc}" target="_blank" rel="noopener noreferrer">PubMed</a>`);
     buttons.push(`<a class="ref-search-btn" href="https://www.google.com/search?q=${qEnc}" target="_blank" rel="noopener noreferrer">Google 検索</a>`);
+    buttons.push(`<div class="ref-search-q" style="flex-basis:100%; font-size:11px; color:var(--muted);">${t('検索語')}: ${q.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</div>`);
     if (doi) {
       buttons.unshift(`<a class="ref-search-btn primary" href="https://doi.org/${encodeURIComponent(doi)}" target="_blank" rel="noopener noreferrer">DOI: ${doi}</a>`);
     }
